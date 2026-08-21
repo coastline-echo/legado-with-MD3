@@ -36,6 +36,7 @@ import io.legado.app.utils.GSON
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.BookSourceUrlConflict
 import io.legado.app.utils.normalizeBookSourceUrl
+import io.legado.app.utils.isUsableBookSourceUrl
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.inputStream
@@ -323,7 +324,7 @@ class BookSourceViewModel(
             is BookSourceIntent.Upload -> uploadSources(intent.ids)
             is BookSourceIntent.ToggleImportItem -> updateImportItems { items ->
                 items.mapIndexed { index, item ->
-                    if (index == intent.index && item.status != ImportStatus.InvalidUrl) {
+                    if (index == intent.index && item.isImportSelectable()) {
                         item.copy(isSelected = !item.isSelected)
                     } else item
                 }
@@ -332,20 +333,35 @@ class BookSourceViewModel(
             is BookSourceIntent.ToggleImportAll -> updateImportItems { items ->
                 items.map {
                     it.copy(
-                        isSelected = intent.selected && it.status != ImportStatus.InvalidUrl
+                        isSelected = intent.selected && it.isImportSelectable()
                     )
                 }
             }
 
             is BookSourceIntent.SetImportDecision -> updateImportItems { items ->
                 items.mapIndexed { index, item ->
-                    if (index == intent.index && item.status != ImportStatus.InvalidUrl) {
+                    if (index == intent.index && item.isImportSelectable()) {
+                        val decision = intent.decision.takeUnless {
+                            it == ImportDecision.KeepBoth && !item.canKeepBoth()
+                        } ?: ImportDecision.Skip
                         item.copy(
-                            decision = intent.decision,
-                            isSelected = intent.decision == ImportDecision.UseImport ||
-                                intent.decision == ImportDecision.KeepBoth,
+                            decision = decision,
+                            isSelected = decision == ImportDecision.UseImport ||
+                                decision == ImportDecision.KeepBoth,
                         )
                     } else item
+                }
+            }
+
+            is BookSourceIntent.SetImportDecisionForAll -> updateImportItems { items ->
+                items.map { item ->
+                    if (!item.isImportSelectable()) item else item.copy(
+                        decision = intent.decision.takeUnless {
+                            it == ImportDecision.KeepBoth && !item.canKeepBoth()
+                        } ?: ImportDecision.Skip,
+                        isSelected = intent.decision == ImportDecision.UseImport ||
+                            (intent.decision == ImportDecision.KeepBoth && item.canKeepBoth()),
+                    )
                 }
             }
 
@@ -487,8 +503,8 @@ class BookSourceViewModel(
                 val localByNormalizedUrl = localSources.mapNotNull { source ->
                     normalizeBookSourceUrl(source.bookSourceUrl)?.normalizedUrl?.let { it to source }
                 }.toMap()
-                val localByHost = localSources.mapNotNull { source ->
-                    normalizeBookSourceUrl(source.bookSourceUrl)?.host?.let { it to source }
+                val localBySearchHint = localSources.mapNotNull { source ->
+                    normalizeSearchUrlHint(source.searchUrl)?.let { it to source }
                 }.toMap()
                 val seen = mutableSetOf<String>()
                 val wrappers = withContext(Dispatchers.IO) {
@@ -497,6 +513,8 @@ class BookSourceViewModel(
                         val identity = normalizeBookSourceUrl(source.bookSourceUrl)
                         val duplicateKey = identity?.normalizedUrl ?: source.bookSourceUrl
                         val internalDuplicate = !seen.add(duplicateKey)
+                        // 只有原始或规范化后的 bookSourceUrl 相同，才能认定为同一个存储书源。
+                        // 仅主机名或搜索地址相同都只是提示，不能自动替换已有书源。
                         val conflict = when {
                             identity == null -> BookSourceUrlConflict.Invalid
                             old != null -> BookSourceUrlConflict.Exact
@@ -505,7 +523,7 @@ class BookSourceViewModel(
                             else -> BookSourceUrlConflict.None
                         }
                         val status = when {
-                            identity == null -> ImportStatus.InvalidUrl
+                            !isUsableBookSourceUrl(source.bookSourceUrl) -> ImportStatus.InvalidUrl
                             internalDuplicate -> ImportStatus.InternalDuplicate
                             conflict == BookSourceUrlConflict.Normalized -> ImportStatus.NormalizedConflict
                             conflict == BookSourceUrlConflict.SameHost -> ImportStatus.HostConflict
@@ -517,14 +535,15 @@ class BookSourceViewModel(
                         }
                         val comparisonSource = old ?: when (conflict) {
                             BookSourceUrlConflict.Normalized -> identity?.normalizedUrl?.let(localByNormalizedUrl::get)
-                            BookSourceUrlConflict.SameHost -> identity?.host?.let(localByHost::get)
                             else -> null
                         }
+                        val searchUrlHint = normalizeSearchUrlHint(source.searchUrl)
+                            ?.let(localBySearchHint::get)
+                            ?.takeIf { old == null }
                         ImportItemWrapper(
                             data = source,
                             oldData = comparisonSource,
                             isSelected = status == ImportStatus.New ||
-                                status == ImportStatus.HostConflict ||
                                 status == ImportStatus.IncompleteLocal,
                             status = status,
                             conflictReason = when (status) {
@@ -543,11 +562,12 @@ class BookSourceViewModel(
                             },
                             normalizedUrl = identity?.normalizedUrl,
                             host = identity?.host,
+                            searchUrlHint = searchUrlHint?.bookSourceName,
                             decision = when {
                                 status == ImportStatus.InvalidUrl -> ImportDecision.Skip
                                 status == ImportStatus.IncompleteImport -> ImportDecision.KeepLocal
                                 status == ImportStatus.IncompleteLocal -> ImportDecision.UseImport
-                                status == ImportStatus.New || status == ImportStatus.HostConflict -> ImportDecision.UseImport
+                                status == ImportStatus.New -> ImportDecision.UseImport
                                 else -> ImportDecision.KeepLocal
                             },
                             localMetadata = comparisonSource?.let { local ->
@@ -639,14 +659,23 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
         launch {
             val newCount = state.items.count { it.isSelected && it.oldData == null && it.status == ImportStatus.New }
             val updateCount = state.items.count {
-                it.isSelected && (it.status == ImportStatus.Update || it.status == ImportStatus.Existing)
+                it.isSelected && (
+                    it.status == ImportStatus.Update ||
+                        it.status == ImportStatus.Existing ||
+                        it.status == ImportStatus.NormalizedConflict
+                    )
             }
             val skippedCount = state.items.count { !it.isSelected }
             val sources = state.items.filter {
                 it.isSelected && it.status != ImportStatus.InvalidUrl
-            }.map { wrapper ->
+            }.distinctBy { it.data.bookSourceUrl }.map { wrapper ->
                 wrapper.data.copy().apply {
                     wrapper.oldData?.let { old ->
+                        // 规范化地址冲突仍代表同一个存储书源。使用导入规则时沿用本地主键，
+                        // 避免已有书籍的 origin、Cookie、缓存和变量因 URL 格式差异而失联。
+                        if (wrapper.status == ImportStatus.NormalizedConflict) {
+                            bookSourceUrl = old.bookSourceUrl
+                        }
                         if (state.keepOriginalName) bookSourceName = old.bookSourceName
                         if (state.keepOriginalGroup) bookSourceGroup = old.bookSourceGroup
                         if (state.keepOriginalEnable) {
@@ -727,6 +756,21 @@ private fun importStatusPriority(status: ImportStatus): Int = when (status) {
     ImportStatus.Error -> 5
     ImportStatus.New -> 6
 }
+
+private fun ImportItemWrapper<BookSource>.isImportSelectable(): Boolean =
+    status != ImportStatus.InvalidUrl && status != ImportStatus.InternalDuplicate
+
+/** 只有导入源具有不同的存储身份时，才允许保留两者。 */
+private fun ImportItemWrapper<BookSource>.canKeepBoth(): Boolean =
+    status != ImportStatus.NormalizedConflict &&
+        status != ImportStatus.InternalDuplicate &&
+        (oldData == null || oldData.bookSourceUrl != data.bookSourceUrl)
+
+private fun normalizeSearchUrlHint(value: String?): String? = value
+    ?.filterNot { it.isWhitespace() || it.isISOControl() }
+    ?.trim()
+    ?.lowercase()
+    ?.takeIf { it.isNotEmpty() }
 
 private fun BookSource.hasCoreRules(): Boolean = listOf(
     ruleSearch,

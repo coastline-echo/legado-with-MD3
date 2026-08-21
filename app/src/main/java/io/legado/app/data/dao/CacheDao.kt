@@ -9,6 +9,7 @@ import io.legado.app.data.entities.Cache
 @Dao
 interface CacheDao {
 
+    /** 导入冲突预览使用：检查书源变量、用户信息、登录头和相关缓存是否存在。 */
     @Query("SELECT EXISTS(SELECT 1 FROM caches WHERE `key` = :sourceUrl OR `key` = 'sourceVariable_' || :sourceUrl OR `key` LIKE 'v_' || :sourceUrl || '_%' OR `key` = 'userInfo_' || :sourceUrl OR `key` = 'loginHeader_' || :sourceUrl)")
     fun hasSourceData(sourceUrl: String): Boolean
 

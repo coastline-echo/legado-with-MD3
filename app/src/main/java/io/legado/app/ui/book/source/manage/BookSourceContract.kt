@@ -100,6 +100,7 @@ sealed interface BookSourceIntent {
     data class ToggleImportItem(val index: Int) : BookSourceIntent
     data class ToggleImportAll(val selected: Boolean) : BookSourceIntent
     data class SetImportDecision(val index: Int, val decision: ImportDecision) : BookSourceIntent
+    data class SetImportDecisionForAll(val decision: ImportDecision) : BookSourceIntent
     data class UpdateImportItem(val index: Int, val source: BookSource) : BookSourceIntent
     data class SelectImportStatus(val status: ImportStatus) : BookSourceIntent
     data class SetImportKeepName(val enabled: Boolean) : BookSourceIntent

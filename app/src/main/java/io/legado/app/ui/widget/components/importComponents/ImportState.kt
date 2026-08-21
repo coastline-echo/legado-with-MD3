@@ -4,13 +4,15 @@ import androidx.compose.runtime.Immutable
 
 // 单个条目的状态包装
 data class ImportItemWrapper<T>(
-    val data: T,// 具体的数据对象 (ReplaceRule, BookSource, etc.)
+    val data: T,// 具体的数据对象（替换规则、书源等）
     val oldData: T? = null,
     val isSelected: Boolean = true,
     val status: ImportStatus = ImportStatus.New, // 用于UI显示颜色
     val conflictReason: ImportConflictReason? = null,
     val normalizedUrl: String? = null,
     val host: String? = null,
+    /** 弱重复提示；不会单独改变书源身份或最终写入决策。 */
+    val searchUrlHint: String? = null,
     val decision: ImportDecision? = null,
     val localMetadata: ImportLocalMetadata? = null,
 )

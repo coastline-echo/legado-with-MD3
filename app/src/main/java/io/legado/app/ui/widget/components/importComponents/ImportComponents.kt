@@ -129,22 +129,24 @@ fun <T> BatchImportDialog(
     itemDecisionLabel: @Composable (decision: ImportDecision?) -> String? = { null },
     itemCanKeepBoth: (item: ImportItemWrapper<T>) -> Boolean = { true },
 ) {
-    AppAlertDialog(
-        data = importState as? BaseImportUiState.Loading,
+    val loadingState = importState as? BaseImportUiState.Loading
+    AppModalBottomSheet(
+        show = loadingState != null,
         onDismissRequest = onDismissRequest,
-        title = (importState as? BaseImportUiState.Loading)?.message
-            ?: stringResource(R.string.loading),
-        content = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                AppCircularProgressIndicator()
-            }
+        title = loadingState?.message ?: stringResource(R.string.loading),
+        modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.35f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            AppCircularProgressIndicator()
+            AppText(loadingState?.message ?: stringResource(R.string.loading))
         }
-    )
+    }
 
     AppAlertDialog(
         data = importState as? BaseImportUiState.Error,
@@ -176,7 +178,9 @@ fun <T> BatchImportDialog(
     }
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
-    val selectableCount = currentState.items.count { it.status != ImportStatus.InvalidUrl }
+    val selectableCount = currentState.items.count {
+        it.status != ImportStatus.InvalidUrl && it.status != ImportStatus.InternalDuplicate
+    }
     val allSelected = selectableCount > 0 && selectedCount == selectableCount
     val sheetTitle = when {
         isEditing -> itemTitle(editingItem.data)
@@ -193,7 +197,7 @@ fun <T> BatchImportDialog(
 
     AppModalBottomSheet(
         show = show,
-        onDismissRequest = onDismissRequest,
+        onDismissRequest = { if (isEditing) editingIndex = null else onDismissRequest() },
         modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.8f),
         title = sheetTitle,
         startAction = if (isEditing) {
@@ -377,6 +381,7 @@ fun ImportItemRow(
 ) {
     SelectionItemCard(
         title = title,
+        titleMaxLines = 2,
         subtitle = subtitle,
         isSelected = isSelected,
         inSelectionMode = true,

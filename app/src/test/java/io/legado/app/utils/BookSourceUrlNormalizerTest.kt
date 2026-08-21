@@ -40,6 +40,21 @@ class BookSourceUrlNormalizerTest {
         assertEquals("https://api-bc.wtzw.com", normalizeBookSourceUrl("https://api-bc.wtzw.com＃妍希")?.normalizedUrl)
     }
 
+    @Test fun acceptsLegacyBookSourceAddressesForImport() {
+        assertEquals("https://novel.html5.qq.com", normalizeBookSourceUrl("novel.html5.qq.com")?.normalizedUrl)
+        assertEquals(
+            "http://m.gulongbbs.com/wuxia",
+            normalizeBookSourceUrl("http://m.gulongbbs.com/wuxia/")?.normalizedUrl
+        )
+        assertEquals("http://m.zhangyue.com", normalizeBookSourceUrl("http://m.zhangyue.com")?.normalizedUrl)
+        assertEquals(
+            "https://网易云音乐.luoyacheng.ip-ddns.com",
+            normalizeBookSourceUrl("https://\n网易云音乐.luoyacheng.ip-ddns.com")?.normalizedUrl
+        )
+        assert(isUsableBookSourceUrl("novel.html5.qq.com"))
+        assert(!isUsableBookSourceUrl("https?://example.com"))
+    }
+
     @Test fun classifiesConflictByFullHostName() {
         val local = listOf("http://api.example.com/")
         assertEquals(BookSourceUrlConflict.Normalized, classifyBookSourceUrlConflict("http://api.example.com", local))

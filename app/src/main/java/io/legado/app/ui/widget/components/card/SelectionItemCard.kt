@@ -58,6 +58,7 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 @Composable
 fun SelectionItemCard(
     title: String,
+    titleMaxLines: Int = 1,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     supportingContent: @Composable (() -> Unit)? = null,
@@ -113,6 +114,7 @@ fun SelectionItemCard(
     ) {
         SelectionItemCardContent(
             title = title,
+            titleMaxLines = titleMaxLines,
             subtitle = subtitle,
             supportingContent = supportingContent,
             isEnabled = isEnabled,
@@ -133,6 +135,7 @@ fun SelectionItemCard(
 @Composable
 fun SelectionItemCardContent(
     title: String,
+    titleMaxLines: Int = 1,
     subtitle: String? = null,
     supportingContent: @Composable (() -> Unit)? = null,
     isEnabled: Boolean = true,
@@ -189,7 +192,7 @@ fun SelectionItemCardContent(
                 AppText(
                     text = title,
                     style = LegadoTheme.typography.titleSmall,
-                    maxLines = 1,
+                    maxLines = titleMaxLines,
                     overflow = TextOverflow.Ellipsis
                 )
                 when {
@@ -211,7 +214,7 @@ fun SelectionItemCardContent(
                     AppText(
                         text = title,
                         style = LegadoTheme.typography.titleSmall,
-                        maxLines = 1,
+                        maxLines = titleMaxLines,
                         overflow = TextOverflow.Ellipsis
                     )
                 },

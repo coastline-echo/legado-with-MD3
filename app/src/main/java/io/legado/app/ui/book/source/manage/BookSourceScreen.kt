@@ -283,6 +283,21 @@ fun BookSourceScreen(
                     RoundDropdownMenuItem(stringResource(R.string.select_update_source), onClick = {
                         dismiss(); onIntent(BookSourceIntent.SelectImportStatus(ImportStatus.Update))
                     })
+                    RoundDropdownMenuItem(stringResource(R.string.select_all), onClick = {
+                        dismiss(); onIntent(BookSourceIntent.ToggleImportAll(true))
+                    })
+                    RoundDropdownMenuItem(stringResource(R.string.deselect_all), onClick = {
+                        dismiss(); onIntent(BookSourceIntent.ToggleImportAll(false))
+                    })
+                    RoundDropdownMenuItem(stringResource(R.string.import_decision_use_import), onClick = {
+                        dismiss(); onIntent(BookSourceIntent.SetImportDecisionForAll(ImportDecision.UseImport))
+                    })
+                    RoundDropdownMenuItem(stringResource(R.string.import_decision_keep_local), onClick = {
+                        dismiss(); onIntent(BookSourceIntent.SetImportDecisionForAll(ImportDecision.KeepLocal))
+                    })
+                    RoundDropdownMenuItem(stringResource(R.string.import_decision_skip), onClick = {
+                        dismiss(); onIntent(BookSourceIntent.SetImportDecisionForAll(ImportDecision.Skip))
+                    })
                     RoundDropdownMenuItem(
                         text = stringResource(R.string.keep_original_name),
                         isSelected = importSuccess?.keepOriginalName == true,
@@ -345,6 +360,9 @@ fun BookSourceScreen(
                 item.host?.let { host ->
                     append("\n").append(stringResource(R.string.import_detail_host, host))
                 }
+                item.searchUrlHint?.let { sourceName ->
+                    append("\n").append(stringResource(R.string.import_detail_search_url_hint, sourceName))
+                }
                 (item.oldData as? io.legado.app.data.entities.BookSource)?.let { local ->
                     append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
                     val imported = item.data
@@ -388,7 +406,9 @@ fun BookSourceScreen(
         },
         itemCanKeepBoth = { item ->
             val local = item.oldData
-            local == null || local.bookSourceUrl != item.data.bookSourceUrl
+            item.status != ImportStatus.NormalizedConflict &&
+                item.status != ImportStatus.InternalDuplicate &&
+                (local == null || local.bookSourceUrl != item.data.bookSourceUrl)
         },
     )
 

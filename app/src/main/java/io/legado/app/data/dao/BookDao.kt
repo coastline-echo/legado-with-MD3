@@ -34,6 +34,7 @@ private const val PUBLIC_BOOK_FILTER =
 @Dao
 interface BookDao {
 
+    /** 导入冲突预览使用：统计引用该书源的书籍数量，不修改任何书籍数据。 */
     @Query("SELECT count(*) FROM books WHERE origin = :origin")
     fun countByOrigin(origin: String): Int
 
