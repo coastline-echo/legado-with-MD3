@@ -1,6 +1,7 @@
 package io.legado.app.ui.widget.components.importComponents
 
 import android.annotation.SuppressLint
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -166,6 +167,9 @@ fun <T> BatchImportDialog(
     var editingIndex by remember(currentState.source) { mutableStateOf<Int?>(null) }
     val editingItem = editingIndex?.let { currentState.items.getOrNull(it) }
     val isEditing = editingItem != null
+    BackHandler(enabled = isEditing) {
+        editingIndex = null
+    }
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
     val allSelected = selectedCount == totalCount
