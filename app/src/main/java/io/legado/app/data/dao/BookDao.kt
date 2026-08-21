@@ -34,6 +34,9 @@ private const val PUBLIC_BOOK_FILTER =
 @Dao
 interface BookDao {
 
+    @Query("SELECT count(*) FROM books WHERE origin = :origin")
+    fun countByOrigin(origin: String): Int
+
     fun flowByGroup(groupId: Long): Flow<List<Book>> {
         return when (groupId) {
             BookGroup.IdRoot -> flowRoot()

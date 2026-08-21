@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonParser
 import io.legado.app.constant.AppConst
+import io.legado.app.data.AppDatabase
 import io.legado.app.constant.AppPattern
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.BookSourcePart
@@ -30,6 +31,7 @@ import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.importComponents.ImportItemWrapper
 import io.legado.app.ui.widget.components.importComponents.ImportStatus
 import io.legado.app.ui.widget.components.importComponents.ImportConflictReason
+import io.legado.app.ui.widget.components.importComponents.ImportDecision
 import io.legado.app.utils.GSON
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.BookSourceUrlConflict
@@ -55,9 +57,11 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class BookSourceViewModel(
     private val application: Application,
+    private val database: AppDatabase,
     private val repository: BookSourceRepository,
     private val uploadRepository: UploadRepository,
     private val otherSettingsGateway: OtherSettingsGateway,
@@ -333,6 +337,18 @@ class BookSourceViewModel(
                 }
             }
 
+            is BookSourceIntent.SetImportDecision -> updateImportItems { items ->
+                items.mapIndexed { index, item ->
+                    if (index == intent.index && item.status != ImportStatus.InvalidUrl) {
+                        item.copy(
+                            decision = intent.decision,
+                            isSelected = intent.decision == ImportDecision.UseImport ||
+                                intent.decision == ImportDecision.KeepBoth,
+                        )
+                    } else item
+                }
+            }
+
             is BookSourceIntent.UpdateImportItem -> updateImportItems { items ->
                 items.mapIndexed { index, item -> if (index == intent.index) item.copy(data = intent.source) else item }
             }
@@ -468,8 +484,15 @@ class BookSourceViewModel(
                 val localIdentities = localSources.mapNotNull { normalizeBookSourceUrl(it.bookSourceUrl) }
                 val localNormalizedUrls = localIdentities.mapTo(hashSetOf()) { it.normalizedUrl }
                 val localHosts = localIdentities.mapTo(hashSetOf()) { it.host }
+                val localByNormalizedUrl = localSources.mapNotNull { source ->
+                    normalizeBookSourceUrl(source.bookSourceUrl)?.normalizedUrl?.let { it to source }
+                }.toMap()
+                val localByHost = localSources.mapNotNull { source ->
+                    normalizeBookSourceUrl(source.bookSourceUrl)?.host?.let { it to source }
+                }.toMap()
                 val seen = mutableSetOf<String>()
-                val wrappers = sources.map { source ->
+                val wrappers = withContext(Dispatchers.IO) {
+                    sources.map { source ->
                         val old = localByUrl[source.bookSourceUrl]
                         val identity = normalizeBookSourceUrl(source.bookSourceUrl)
                         val duplicateKey = identity?.normalizedUrl ?: source.bookSourceUrl
@@ -486,27 +509,57 @@ class BookSourceViewModel(
                             internalDuplicate -> ImportStatus.InternalDuplicate
                             conflict == BookSourceUrlConflict.Normalized -> ImportStatus.NormalizedConflict
                             conflict == BookSourceUrlConflict.SameHost -> ImportStatus.HostConflict
+                            old != null && !source.hasCoreRules() && old.hasCoreRules() -> ImportStatus.IncompleteImport
+                            old != null && source.hasCoreRules() && !old.hasCoreRules() -> ImportStatus.IncompleteLocal
                             old == null -> ImportStatus.New
                             source.lastUpdateTime > old.lastUpdateTime -> ImportStatus.Update
                             else -> ImportStatus.Existing
                         }
+                        val comparisonSource = old ?: when (conflict) {
+                            BookSourceUrlConflict.Normalized -> identity?.normalizedUrl?.let(localByNormalizedUrl::get)
+                            BookSourceUrlConflict.SameHost -> identity?.host?.let(localByHost::get)
+                            else -> null
+                        }
                         ImportItemWrapper(
                             data = source,
-                            oldData = old,
-                            isSelected = status == ImportStatus.New || status == ImportStatus.HostConflict,
+                            oldData = comparisonSource,
+                            isSelected = status == ImportStatus.New ||
+                                status == ImportStatus.HostConflict ||
+                                status == ImportStatus.IncompleteLocal,
                             status = status,
                             conflictReason = when (status) {
                                 ImportStatus.NormalizedConflict -> ImportConflictReason.NormalizedUrl
                                 ImportStatus.HostConflict -> ImportConflictReason.SameHost
                                 ImportStatus.InternalDuplicate -> ImportConflictReason.InternalDuplicate
-                                ImportStatus.InvalidUrl -> ImportConflictReason.InvalidUrl
+                                ImportStatus.InvalidUrl -> if (source.bookSourceUrl.contains("https?://") || source.bookSourceUrl.contains("(?!")) {
+                                    ImportConflictReason.InvalidPattern
+                                } else {
+                                    ImportConflictReason.InvalidUrl
+                                }
+                                ImportStatus.IncompleteImport -> ImportConflictReason.IncompleteImport
+                                ImportStatus.IncompleteLocal -> ImportConflictReason.IncompleteLocal
                                 ImportStatus.Update, ImportStatus.Existing -> ImportConflictReason.ExistingUrl
                                 else -> null
                             },
                             normalizedUrl = identity?.normalizedUrl,
                             host = identity?.host,
+                            decision = when {
+                                status == ImportStatus.InvalidUrl -> ImportDecision.Skip
+                                status == ImportStatus.IncompleteImport -> ImportDecision.KeepLocal
+                                status == ImportStatus.IncompleteLocal -> ImportDecision.UseImport
+                                status == ImportStatus.New || status == ImportStatus.HostConflict -> ImportDecision.UseImport
+                                else -> ImportDecision.KeepLocal
+                            },
+                            localMetadata = comparisonSource?.let { local ->
+                                io.legado.app.ui.widget.components.importComponents.ImportLocalMetadata(
+                                    bookReferenceCount = database.bookDao.countByOrigin(local.bookSourceUrl),
+                                    hasCookie = database.cookieDao.hasUrl(local.bookSourceUrl),
+                                    hasVariablesOrCache = database.cacheDao.hasSourceData(local.bookSourceUrl),
+                                )
+                            },
                         )
                     }
+                }
                 importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_preview))
                 BaseImportUiState.Success(
                     source = input,
@@ -584,6 +637,11 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
     private fun saveImportedSources() {
         val state = importState.value as? BaseImportUiState.Success<BookSource> ?: return
         launch {
+            val newCount = state.items.count { it.isSelected && it.oldData == null && it.status == ImportStatus.New }
+            val updateCount = state.items.count {
+                it.isSelected && (it.status == ImportStatus.Update || it.status == ImportStatus.Existing)
+            }
+            val skippedCount = state.items.count { !it.isSelected }
             val sources = state.items.filter {
                 it.isSelected && it.status != ImportStatus.InvalidUrl
             }.map { wrapper ->
@@ -611,8 +669,18 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
             SourceHelp.insertBookSource(*sources.toTypedArray())
             ContentProcessor.upReplaceRules()
             importState.value = BaseImportUiState.Idle
-            _effects.tryEmit(BookSourceEffect.ImportFinished)
-            _effects.tryEmit(BookSourceEffect.ShowSnackbar("导入完成"))
+            val summary = application.getString(
+                io.legado.app.R.string.import_summary,
+                newCount,
+                updateCount,
+                skippedCount,
+                state.items.count { it.status == ImportStatus.NormalizedConflict },
+                state.items.count { it.status == ImportStatus.HostConflict },
+                state.items.count { it.status == ImportStatus.InternalDuplicate },
+                state.items.count { it.status == ImportStatus.InvalidUrl },
+                state.items.count { it.status == ImportStatus.IncompleteImport || it.status == ImportStatus.IncompleteLocal },
+            )
+            _effects.tryEmit(BookSourceEffect.ImportFinished(summary))
         }
     }
 
@@ -650,13 +718,23 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
 }
 
 private fun importStatusPriority(status: ImportStatus): Int = when (status) {
-    ImportStatus.NormalizedConflict -> 0
-    ImportStatus.InternalDuplicate -> 1
-    ImportStatus.Update, ImportStatus.Existing -> 2
-    ImportStatus.HostConflict -> 3
-    ImportStatus.InvalidUrl, ImportStatus.Error -> 4
-    ImportStatus.New -> 5
+    ImportStatus.InvalidUrl -> 0
+    ImportStatus.NormalizedConflict -> 1
+    ImportStatus.InternalDuplicate -> 2
+    ImportStatus.Update, ImportStatus.Existing -> 3
+    ImportStatus.HostConflict -> 4
+    ImportStatus.IncompleteImport, ImportStatus.IncompleteLocal -> 5
+    ImportStatus.Error -> 5
+    ImportStatus.New -> 6
 }
+
+private fun BookSource.hasCoreRules(): Boolean = listOf(
+    ruleSearch,
+    ruleExplore,
+    ruleBookInfo,
+    ruleToc,
+    ruleContent,
+).count { it != null } >= 3
 
 private fun BookSourceCheckOptionsUi.toSettings() = CheckSourceSettings(
     timeoutMillis = timeoutSeconds * 1000,

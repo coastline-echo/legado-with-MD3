@@ -51,6 +51,7 @@ import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
+import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
@@ -123,7 +124,10 @@ fun <T> BatchImportDialog(
     topBarActions: @Composable RowScope.() -> Unit = {},
     itemTitle: (data: T) -> String,
     itemSubtitle: (data: T) -> String? = { null },
-    itemConflictSubtitle: @Composable (item: ImportItemWrapper<T>) -> String? = { itemSubtitle(it.data) }
+    itemConflictSubtitle: @Composable (item: ImportItemWrapper<T>) -> String? = { itemSubtitle(it.data) },
+    onSetItemDecision: ((index: Int, decision: ImportDecision) -> Unit)? = null,
+    itemDecisionLabel: @Composable (decision: ImportDecision?) -> String? = { null },
+    itemCanKeepBoth: (item: ImportItemWrapper<T>) -> Boolean = { true },
 ) {
     AppAlertDialog(
         data = importState as? BaseImportUiState.Loading,
@@ -172,7 +176,8 @@ fun <T> BatchImportDialog(
     }
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
-    val allSelected = selectedCount == totalCount
+    val selectableCount = currentState.items.count { it.status != ImportStatus.InvalidUrl }
+    val allSelected = selectableCount > 0 && selectedCount == selectableCount
     val sheetTitle = when {
         isEditing -> itemTitle(editingItem.data)
         selectedCount > 0 -> {
@@ -241,7 +246,7 @@ fun <T> BatchImportDialog(
                     .fillMaxWidth()
                     .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.58f)
             ) {
-                LazyColumn(
+                FastScrollLazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -259,7 +264,13 @@ fun <T> BatchImportDialog(
                             onInfoClick = {
                                 onItemInfoClick(index)
                                 editingIndex = index
-                            }
+                            },
+                            decision = itemWrapper.decision,
+                            decisionLabel = itemDecisionLabel(itemWrapper.decision),
+                            canKeepBoth = itemCanKeepBoth(itemWrapper),
+                            onDecisionClick = onSetItemDecision?.let { callback ->
+                                { decision -> callback(index, decision) }
+                            },
                         )
                     }
                 }
@@ -358,7 +369,11 @@ fun ImportItemRow(
     isSelected: Boolean,
     status: ImportStatus,
     onClick: () -> Unit,
-    onInfoClick: () -> Unit
+    onInfoClick: () -> Unit,
+    decision: ImportDecision? = null,
+    decisionLabel: String? = null,
+    onDecisionClick: ((ImportDecision) -> Unit)? = null,
+    canKeepBoth: Boolean = true,
 ) {
     SelectionItemCard(
         title = title,
@@ -377,6 +392,8 @@ fun ImportItemRow(
                     ImportStatus.HostConflict -> stringResource(R.string.import_status_host_conflict)
                     ImportStatus.InternalDuplicate -> stringResource(R.string.import_status_internal_duplicate)
                     ImportStatus.InvalidUrl -> stringResource(R.string.import_status_invalid_url)
+                    ImportStatus.IncompleteImport -> stringResource(R.string.import_status_incomplete_import)
+                    ImportStatus.IncompleteLocal -> stringResource(R.string.import_status_incomplete_local)
                     ImportStatus.Error -> stringResource(R.string.import_status_error)
                 },
                 style = LegadoTheme.typography.labelMedium,
@@ -386,10 +403,28 @@ fun ImportItemRow(
                     ImportStatus.Error -> LegadoTheme.colorScheme.error
                     ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate, ImportStatus.InvalidUrl -> LegadoTheme.colorScheme.error
                     ImportStatus.HostConflict -> LegadoTheme.colorScheme.secondary
+                    ImportStatus.IncompleteImport, ImportStatus.IncompleteLocal -> LegadoTheme.colorScheme.error
                     else -> LegadoTheme.colorScheme.outline
                 },
                 modifier = Modifier.padding(end = 4.dp)
             )
+
+            if (decisionLabel != null) {
+                SmallPlainButton(
+                    onClick = {
+                        val next = when (decision) {
+                            ImportDecision.KeepLocal -> ImportDecision.UseImport
+                            ImportDecision.UseImport -> if (canKeepBoth) ImportDecision.KeepBoth else ImportDecision.Skip
+                            ImportDecision.KeepBoth -> ImportDecision.Skip
+                            ImportDecision.Skip, null -> ImportDecision.KeepLocal
+                        }
+                        onDecisionClick?.invoke(next)
+                    },
+                    text = decisionLabel,
+                    enabled = onDecisionClick != null && status != ImportStatus.InvalidUrl,
+                    contentDescription = decisionLabel,
+                )
+            }
 
             SmallPlainButton(
                 onClick = onInfoClick,

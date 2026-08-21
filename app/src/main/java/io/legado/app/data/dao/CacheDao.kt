@@ -9,6 +9,9 @@ import io.legado.app.data.entities.Cache
 @Dao
 interface CacheDao {
 
+    @Query("SELECT EXISTS(SELECT 1 FROM caches WHERE `key` = :sourceUrl OR `key` = 'sourceVariable_' || :sourceUrl OR `key` LIKE 'v_' || :sourceUrl || '_%' OR `key` = 'userInfo_' || :sourceUrl OR `key` = 'loginHeader_' || :sourceUrl)")
+    fun hasSourceData(sourceUrl: String): Boolean
+
     @Query("select * from caches where `key` = :key")
     fun get(key: String): Cache?
 

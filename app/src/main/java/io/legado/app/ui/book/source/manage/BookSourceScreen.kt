@@ -68,6 +68,7 @@ import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.importComponents.BatchImportDialog
 import io.legado.app.ui.widget.components.importComponents.ImportStatus
+import io.legado.app.ui.widget.components.importComponents.ImportDecision
 import io.legado.app.ui.widget.components.importComponents.SourceInputDialog
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
@@ -111,7 +112,8 @@ fun BookSourceRouteScreen(
 
                 BookSourceEffect.CancelCheck -> BookSourceCheckService.stop(context)
 
-                BookSourceEffect.ImportFinished -> {
+                is BookSourceEffect.ImportFinished -> {
+                    snackbarHostState.showSnackbar(effect.summary)
                     if (closeAfterImport) onImportClosed()
                 }
 
@@ -328,6 +330,12 @@ fun BookSourceScreen(
                             stringResource(R.string.import_conflict_existing_url)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidUrl ->
                             stringResource(R.string.import_status_invalid_url)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidPattern ->
+                            stringResource(R.string.import_status_invalid_pattern)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteImport ->
+                            stringResource(R.string.import_status_incomplete_import)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteLocal ->
+                            stringResource(R.string.import_status_incomplete_local)
                     }
                     append("\n").append(reason)
                 }
@@ -339,8 +347,48 @@ fun BookSourceScreen(
                 }
                 (item.oldData as? io.legado.app.data.entities.BookSource)?.let { local ->
                     append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
+                    val imported = item.data
+                    val changed = buildList {
+                        if (imported.bookSourceName != local.bookSourceName) add(stringResource(R.string.import_diff_name))
+                        if (imported.bookSourceGroup != local.bookSourceGroup) add(stringResource(R.string.import_diff_group))
+                        if (imported.bookSourceType != local.bookSourceType) add(stringResource(R.string.import_diff_type))
+                        if (imported.lastUpdateTime != local.lastUpdateTime) add(stringResource(R.string.import_diff_update_time))
+                        if ((imported.ruleSearch != null) != (local.ruleSearch != null)) add(stringResource(R.string.import_diff_search_rule))
+                        if ((imported.ruleExplore != null) != (local.ruleExplore != null)) add(stringResource(R.string.import_diff_explore_rule))
+                        if ((imported.ruleBookInfo != null) != (local.ruleBookInfo != null)) add(stringResource(R.string.import_diff_info_rule))
+                        if ((imported.ruleToc != null) != (local.ruleToc != null)) add(stringResource(R.string.import_diff_toc_rule))
+                        if ((imported.ruleContent != null) != (local.ruleContent != null)) add(stringResource(R.string.import_diff_content_rule))
+                    }
+                    if (changed.isNotEmpty()) {
+                        append("\n").append(stringResource(R.string.import_detail_differences, changed.joinToString("、")))
+                    }
+                    item.localMetadata?.let { metadata ->
+                        append("\n").append(
+                            stringResource(
+                                R.string.import_detail_local_usage,
+                                metadata.bookReferenceCount,
+                                if (metadata.hasCookie) stringResource(R.string.yes) else stringResource(R.string.no),
+                                if (metadata.hasVariablesOrCache) stringResource(R.string.yes) else stringResource(R.string.no),
+                            )
+                        )
+                    }
                 }
             }
+        },
+        onSetItemDecision = { index, decision ->
+            onIntent(BookSourceIntent.SetImportDecision(index, decision))
+        },
+        itemDecisionLabel = { decision ->
+            when (decision) {
+                ImportDecision.KeepLocal -> stringResource(R.string.import_decision_keep_local)
+                ImportDecision.UseImport -> stringResource(R.string.import_decision_use_import)
+                ImportDecision.KeepBoth -> stringResource(R.string.import_decision_keep_both)
+                ImportDecision.Skip, null -> stringResource(R.string.import_decision_skip)
+            }
+        },
+        itemCanKeepBoth = { item ->
+            val local = item.oldData
+            local == null || local.bookSourceUrl != item.data.bookSourceUrl
         },
     )
 

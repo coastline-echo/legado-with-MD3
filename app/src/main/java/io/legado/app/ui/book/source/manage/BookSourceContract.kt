@@ -6,6 +6,7 @@ import androidx.compose.runtime.Stable
 import io.legado.app.data.entities.BookSource
 import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.importComponents.ImportStatus
+import io.legado.app.ui.widget.components.importComponents.ImportDecision
 import io.legado.app.ui.widget.components.list.InteractionState
 import io.legado.app.ui.widget.components.list.ListUiState
 import io.legado.app.ui.widget.components.list.SelectableItem
@@ -98,6 +99,7 @@ sealed interface BookSourceIntent {
     data class Upload(val ids: Set<String>) : BookSourceIntent
     data class ToggleImportItem(val index: Int) : BookSourceIntent
     data class ToggleImportAll(val selected: Boolean) : BookSourceIntent
+    data class SetImportDecision(val index: Int, val decision: ImportDecision) : BookSourceIntent
     data class UpdateImportItem(val index: Int, val source: BookSource) : BookSourceIntent
     data class SelectImportStatus(val status: ImportStatus) : BookSourceIntent
     data class SetImportKeepName(val enabled: Boolean) : BookSourceIntent
@@ -116,7 +118,7 @@ sealed interface BookSourceEffect {
 
     data object CancelCheck : BookSourceEffect
 
-    data object ImportFinished : BookSourceEffect
+    data class ImportFinished(val summary: String) : BookSourceEffect
 
     data class ShowSnackbar(
         val message: String,

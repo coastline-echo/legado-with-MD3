@@ -12,8 +12,15 @@ data class BookSourceUrlIdentity(
 fun normalizeBookSourceUrl(value: String): BookSourceUrlIdentity? {
     val cleaned = value
         .trim { it.isWhitespace() || it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() }
-        .replace(Regex("##@[^/?#]*$"), "")
+        .replace('＃', '#')
+        .replace(Regex("(?:已校验|已验证|已整理)$"), "")
+        .substringBefore("##")
+        .substringBefore("#")
+        .trimEnd('/')
     if (cleaned.isEmpty()) return null
+    if (cleaned.contains(Regex("^https\\?://", RegexOption.IGNORE_CASE)) ||
+        cleaned.contains("(?!") || cleaned.contains(".*")
+    ) return null
     val uri = runCatching { URI(cleaned) }.getOrNull() ?: return null
     val scheme = uri.scheme ?: return null
     val host = uri.host?.lowercase(Locale.ROOT) ?: return null

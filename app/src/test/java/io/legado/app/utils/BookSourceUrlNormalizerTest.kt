@@ -31,6 +31,13 @@ class BookSourceUrlNormalizerTest {
     @Test fun invalidAndEmptyUrlsReturnNull() {
         assertNull(normalizeBookSourceUrl(""))
         assertNull(normalizeBookSourceUrl("not a url"))
+        assertNull(normalizeBookSourceUrl("https?://api.example.com/(?!.*newsearch)."))
+    }
+
+    @Test fun stripsBookSourceAnnotations() {
+        assertEquals("https://www.txtduo.net", normalizeBookSourceUrl("https://www.txtduo.net/##Rosiapng")?.normalizedUrl)
+        assertEquals("https://m.kanman.com", normalizeBookSourceUrl("https://m.kanman.com已校验")?.normalizedUrl)
+        assertEquals("https://api-bc.wtzw.com", normalizeBookSourceUrl("https://api-bc.wtzw.com＃妍希")?.normalizedUrl)
     }
 
     @Test fun classifiesConflictByFullHostName() {

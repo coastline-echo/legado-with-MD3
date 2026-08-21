@@ -1,5 +1,7 @@
 package io.legado.app.ui.widget.components.importComponents
 
+import androidx.compose.runtime.Immutable
+
 // 单个条目的状态包装
 data class ImportItemWrapper<T>(
     val data: T,// 具体的数据对象 (ReplaceRule, BookSource, etc.)
@@ -9,13 +11,32 @@ data class ImportItemWrapper<T>(
     val conflictReason: ImportConflictReason? = null,
     val normalizedUrl: String? = null,
     val host: String? = null,
+    val decision: ImportDecision? = null,
+    val localMetadata: ImportLocalMetadata? = null,
 )
+
+@Immutable
+data class ImportLocalMetadata(
+    val bookReferenceCount: Int = 0,
+    val hasCookie: Boolean = false,
+    val hasVariablesOrCache: Boolean = false,
+)
+
+enum class ImportDecision {
+    KeepLocal,
+    UseImport,
+    KeepBoth,
+    Skip,
+}
 
 enum class ImportConflictReason {
     NormalizedUrl,
     SameHost,
     InternalDuplicate,
     InvalidUrl,
+    InvalidPattern,
+    IncompleteImport,
+    IncompleteLocal,
     ExistingUrl,
 }
 
@@ -28,6 +49,8 @@ enum class ImportStatus {
     HostConflict,
     InternalDuplicate,
     InvalidUrl,
+    IncompleteImport,
+    IncompleteLocal,
     Error     // 错误 红
 }
 
