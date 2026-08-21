@@ -119,7 +119,8 @@ fun <T> BatchImportDialog(
     onUpdateItem: (index: Int, data: T) -> Unit = { _, _ -> },
     topBarActions: @Composable RowScope.() -> Unit = {},
     itemTitle: (data: T) -> String,
-    itemSubtitle: (data: T) -> String? = { null }
+    itemSubtitle: (data: T) -> String? = { null },
+    itemConflictSubtitle: @Composable (item: ImportItemWrapper<T>) -> String? = { itemSubtitle(it.data) }
 ) {
     AppAlertDialog(
         data = importState as? BaseImportUiState.Loading,
@@ -241,7 +242,7 @@ fun <T> BatchImportDialog(
                     ) { index, itemWrapper ->
                         ImportItemRow(
                             title = itemTitle(itemWrapper.data),
-                            subtitle = itemSubtitle(itemWrapper.data),
+                            subtitle = itemConflictSubtitle(itemWrapper),
                             isSelected = itemWrapper.isSelected,
                             status = itemWrapper.status,
                             onClick = { onToggleItem(index) },
@@ -362,6 +363,9 @@ fun ImportItemRow(
                     ImportStatus.New -> stringResource(R.string.import_status_new)
                     ImportStatus.Update -> stringResource(R.string.import_status_update)
                     ImportStatus.Existing -> stringResource(R.string.import_status_existing)
+                    ImportStatus.NormalizedConflict -> stringResource(R.string.import_status_normalized_conflict)
+                    ImportStatus.HostConflict -> stringResource(R.string.import_status_host_conflict)
+                    ImportStatus.InternalDuplicate -> stringResource(R.string.import_status_internal_duplicate)
                     ImportStatus.Error -> stringResource(R.string.import_status_error)
                 },
                 style = LegadoTheme.typography.labelMedium,
@@ -369,6 +373,8 @@ fun ImportItemRow(
                     ImportStatus.New -> LegadoTheme.colorScheme.primary
                     ImportStatus.Update -> LegadoTheme.colorScheme.secondary
                     ImportStatus.Error -> LegadoTheme.colorScheme.error
+                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate -> LegadoTheme.colorScheme.error
+                    ImportStatus.HostConflict -> LegadoTheme.colorScheme.secondary
                     else -> LegadoTheme.colorScheme.outline
                 },
                 modifier = Modifier.padding(end = 4.dp)

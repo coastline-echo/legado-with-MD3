@@ -313,6 +313,29 @@ fun BookSourceScreen(
         },
         itemTitle = { it.bookSourceName },
         itemSubtitle = { it.bookSourceUrl },
+        itemConflictSubtitle = { item ->
+            buildString {
+                append(item.data.bookSourceUrl)
+                item.conflictReason?.let {
+                    val reason = when (it) {
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.NormalizedUrl ->
+                            stringResource(R.string.import_conflict_normalized_url)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.SameHost ->
+                            stringResource(R.string.import_conflict_same_host)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InternalDuplicate ->
+                            stringResource(R.string.import_conflict_internal_duplicate)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.ExistingUrl ->
+                            stringResource(R.string.import_conflict_existing_url)
+                    }
+                    append("\n").append(reason)
+                }
+                item.normalizedUrl?.let { append("\n规范化: ").append(it) }
+                item.host?.let { append("\n主机名: ").append(it) }
+                (item.oldData as? io.legado.app.data.entities.BookSource)?.let {
+                    append("\n本地书源: ").append(it.bookSourceName)
+                }
+            }
+        },
     )
 
     BookSourceImportGroupDialog(

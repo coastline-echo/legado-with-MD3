@@ -2450,6 +2450,13 @@
     <string name="import_status_update">Update</string>
     <string name="import_status_existing">Existing</string>
     <string name="import_status_error">Error</string>
+    <string name="import_status_normalized_conflict">规范化冲突</string>
+    <string name="import_status_host_conflict">同主机名疑似重复</string>
+    <string name="import_status_internal_duplicate">导入文件内部重复</string>
+    <string name="import_conflict_normalized_url">规范化 URL 与本地书源冲突</string>
+    <string name="import_conflict_same_host">完整主机名相同，路径或参数不同</string>
+    <string name="import_conflict_internal_duplicate">导入文件中已出现相同规范化 URL</string>
+    <string name="import_conflict_existing_url">原始 URL 已存在本地书源</string>
     <string name="details">Details</string>
     <string name="error_details">Error Details</string>
     <string name="reload">Reload</string>

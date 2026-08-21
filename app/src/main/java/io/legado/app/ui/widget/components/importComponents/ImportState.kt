@@ -5,14 +5,27 @@ data class ImportItemWrapper<T>(
     val data: T,// 具体的数据对象 (ReplaceRule, BookSource, etc.)
     val oldData: T? = null,
     val isSelected: Boolean = true,
-    val status: ImportStatus = ImportStatus.New // 用于UI显示颜色
+    val status: ImportStatus = ImportStatus.New, // 用于UI显示颜色
+    val conflictReason: ImportConflictReason? = null,
+    val normalizedUrl: String? = null,
+    val host: String? = null,
 )
+
+enum class ImportConflictReason {
+    NormalizedUrl,
+    SameHost,
+    InternalDuplicate,
+    ExistingUrl,
+}
 
 // 导入状态枚举
 enum class ImportStatus {
     New,      // 新增 绿
     Update,   // 更新 黄
     Existing, // 已有 灰
+    NormalizedConflict,
+    HostConflict,
+    InternalDuplicate,
     Error     // 错误 红
 }
 
