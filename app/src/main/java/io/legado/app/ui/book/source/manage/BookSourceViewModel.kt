@@ -477,6 +477,9 @@ class BookSourceViewModel(
         importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_reading))
         launch {
             runCatching {
+                // 大文件读取、JSON 解析、数据库查询和冲突预览都在 IO 线程完成，
+                // 让每个阶段的 Loading 状态有机会在主线程重绘。
+                withContext(Dispatchers.IO) {
                 val text = if (input.isAbsUrl()) {
                     okHttpClient.newCallResponseBody {
                         if (input.endsWith("#requestWithoutUA")) {
@@ -507,8 +510,7 @@ class BookSourceViewModel(
                     normalizeSearchUrlHint(source.searchUrl)?.let { it to source }
                 }.toMap()
                 val seen = mutableSetOf<String>()
-                val wrappers = withContext(Dispatchers.IO) {
-                    sources.map { source ->
+                val wrappers = sources.map { source ->
                         val old = localByUrl[source.bookSourceUrl]
                         val identity = normalizeBookSourceUrl(source.bookSourceUrl)
                         val duplicateKey = identity?.normalizedUrl ?: source.bookSourceUrl
@@ -579,7 +581,6 @@ class BookSourceViewModel(
                             },
                         )
                     }
-                }
                 importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_preview))
                 BaseImportUiState.Success(
                     source = input,
@@ -588,9 +589,15 @@ class BookSourceViewModel(
                     keepOriginalGroup = settings.importKeepGroup,
                     keepOriginalEnable = settings.importKeepEnable,
                 )
+                }
             }.onSuccess { importState.value = it }
                 .onFailure {
-                    importState.value = BaseImportUiState.Error(it.localizedMessage ?: "导入失败")
+                    val message = if (it is SecurityException) {
+                        "无法读取所选文件，请使用系统文件选择器后重试"
+                    } else {
+                        it.localizedMessage ?: "导入失败"
+                    }
+                    importState.value = BaseImportUiState.Error(message)
                 }
         }
     }

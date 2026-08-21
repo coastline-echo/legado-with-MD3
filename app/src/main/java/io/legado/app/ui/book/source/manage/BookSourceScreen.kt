@@ -216,11 +216,7 @@ fun BookSourceScreen(
     }
     val importDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let {
-                context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
-                    onIntent(BookSourceIntent.Import(reader.readText()))
-                }
-            }
+            uri?.let { onIntent(BookSourceIntent.Import(it.toString())) }
         }
     val qrCodeImport =
         rememberLauncherForActivityResult(QrCodeResult()) { result ->

@@ -2,6 +2,7 @@ package io.legado.app.ui.widget.components.importComponents
 
 import android.annotation.SuppressLint
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,7 @@ import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressI
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.GSON
+import kotlinx.coroutines.flow.collect
 
 @Composable
 fun SourceInputDialog(
@@ -173,9 +175,6 @@ fun <T> BatchImportDialog(
     var editingIndex by remember(currentState.source) { mutableStateOf<Int?>(null) }
     val editingItem = editingIndex?.let { currentState.items.getOrNull(it) }
     val isEditing = editingItem != null
-    BackHandler(enabled = isEditing) {
-        editingIndex = null
-    }
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
     val selectableCount = currentState.items.count {
@@ -198,6 +197,7 @@ fun <T> BatchImportDialog(
     AppModalBottomSheet(
         show = show,
         onDismissRequest = { if (isEditing) editingIndex = null else onDismissRequest() },
+        sheetGesturesEnabled = !isEditing,
         modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.8f),
         title = sheetTitle,
         startAction = if (isEditing) {
@@ -237,6 +237,14 @@ fun <T> BatchImportDialog(
             null
         }
     ) {
+        // 放在底部弹窗内容内，优先于弹窗自身处理系统/预测返回。
+        BackHandler {
+            if (isEditing) editingIndex = null else onDismissRequest()
+        }
+        PredictiveBackHandler { progress ->
+            progress.collect { }
+            if (isEditing) editingIndex = null else onDismissRequest()
+        }
         if (isEditing) {
             BatchImportJsonEditContent(
                 data = editingItem.data,
