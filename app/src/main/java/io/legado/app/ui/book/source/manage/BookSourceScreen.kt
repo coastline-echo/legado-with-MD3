@@ -326,13 +326,19 @@ fun BookSourceScreen(
                             stringResource(R.string.import_conflict_internal_duplicate)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.ExistingUrl ->
                             stringResource(R.string.import_conflict_existing_url)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidUrl ->
+                            stringResource(R.string.import_status_invalid_url)
                     }
                     append("\n").append(reason)
                 }
-                item.normalizedUrl?.let { append("\n规范化: ").append(it) }
-                item.host?.let { append("\n主机名: ").append(it) }
-                (item.oldData as? io.legado.app.data.entities.BookSource)?.let {
-                    append("\n本地书源: ").append(it.bookSourceName)
+                item.normalizedUrl?.let { normalized ->
+                    append("\n").append(stringResource(R.string.import_detail_normalized, normalized))
+                }
+                item.host?.let { host ->
+                    append("\n").append(stringResource(R.string.import_detail_host, host))
+                }
+                (item.oldData as? io.legado.app.data.entities.BookSource)?.let { local ->
+                    append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
                 }
             }
         },

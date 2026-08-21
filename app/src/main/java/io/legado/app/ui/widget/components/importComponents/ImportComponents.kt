@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
@@ -29,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -125,7 +127,8 @@ fun <T> BatchImportDialog(
     AppAlertDialog(
         data = importState as? BaseImportUiState.Loading,
         onDismissRequest = onDismissRequest,
-        title = stringResource(R.string.loading),
+        title = (importState as? BaseImportUiState.Loading)?.message
+            ?: stringResource(R.string.loading),
         content = {
             Box(
                 modifier = Modifier
@@ -158,6 +161,8 @@ fun <T> BatchImportDialog(
     if (!show && cachedState == null) return
 
     val currentState = cachedState!!
+    val listState = rememberLazyListState()
+    LaunchedEffect(currentState.source) { listState.scrollToItem(0) }
     var editingIndex by remember(currentState.source) { mutableStateOf<Int?>(null) }
     val editingItem = editingIndex?.let { currentState.items.getOrNull(it) }
     val isEditing = editingItem != null
@@ -233,6 +238,7 @@ fun <T> BatchImportDialog(
                     .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.58f)
             ) {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -366,6 +372,7 @@ fun ImportItemRow(
                     ImportStatus.NormalizedConflict -> stringResource(R.string.import_status_normalized_conflict)
                     ImportStatus.HostConflict -> stringResource(R.string.import_status_host_conflict)
                     ImportStatus.InternalDuplicate -> stringResource(R.string.import_status_internal_duplicate)
+                    ImportStatus.InvalidUrl -> stringResource(R.string.import_status_invalid_url)
                     ImportStatus.Error -> stringResource(R.string.import_status_error)
                 },
                 style = LegadoTheme.typography.labelMedium,
@@ -373,7 +380,7 @@ fun ImportItemRow(
                     ImportStatus.New -> LegadoTheme.colorScheme.primary
                     ImportStatus.Update -> LegadoTheme.colorScheme.secondary
                     ImportStatus.Error -> LegadoTheme.colorScheme.error
-                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate -> LegadoTheme.colorScheme.error
+                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate, ImportStatus.InvalidUrl -> LegadoTheme.colorScheme.error
                     ImportStatus.HostConflict -> LegadoTheme.colorScheme.secondary
                     else -> LegadoTheme.colorScheme.outline
                 },

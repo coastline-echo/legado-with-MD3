@@ -231,7 +231,7 @@ abstract class BaseRuleViewModel<T : SelectableItem<ID>, Entity, ID, S : ListUiS
     }
 
     fun importSource(text: String) {
-        _importState.value = BaseImportUiState.Loading
+        _importState.value = BaseImportUiState.Loading()
 
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {

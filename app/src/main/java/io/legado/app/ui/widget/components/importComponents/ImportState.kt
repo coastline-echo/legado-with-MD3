@@ -15,6 +15,7 @@ enum class ImportConflictReason {
     NormalizedUrl,
     SameHost,
     InternalDuplicate,
+    InvalidUrl,
     ExistingUrl,
 }
 
@@ -26,13 +27,14 @@ enum class ImportStatus {
     NormalizedConflict,
     HostConflict,
     InternalDuplicate,
+    InvalidUrl,
     Error     // 错误 红
 }
 
 // 整个导入流程的 UI State
 sealed interface BaseImportUiState<out T> {
     data object Idle : BaseImportUiState<Nothing>
-    data object Loading : BaseImportUiState<Nothing>
+    data class Loading(val message: String? = null) : BaseImportUiState<Nothing>
     data class Error(val msg: String) : BaseImportUiState<Nothing>
     data class Success<T>(
         val source: String,

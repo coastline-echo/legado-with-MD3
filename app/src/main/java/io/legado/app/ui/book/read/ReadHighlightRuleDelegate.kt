@@ -170,7 +170,7 @@ class ReadHighlightRuleDelegate(
     // --- 导入 ---
 
     fun importSource(text: String) {
-        _uiState.update { it.copy(importState = BaseImportUiState.Loading) }
+        _uiState.update { it.copy(importState = BaseImportUiState.Loading()) }
         Coroutine.async(scope, Dispatchers.IO) {
             val importedRules = importSourceAwait(text.trim())
                 .map(highlightRuleRepository::sanitizeRule)

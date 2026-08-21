@@ -843,7 +843,7 @@ class CloudTtsViewModel(
     }
 
     private fun importHttpTtsSource(text: String) = viewModelScope.launch {
-        _uiState.update { it.copy(httpTtsImportState = BaseImportUiState.Loading) }
+        _uiState.update { it.copy(httpTtsImportState = BaseImportUiState.Loading()) }
         runCatching {
             val source = text.trim()
             val list = withContext(Dispatchers.IO) { parseHttpTtsSource(source) }

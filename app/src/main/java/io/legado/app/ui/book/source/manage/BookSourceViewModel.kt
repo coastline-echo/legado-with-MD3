@@ -34,7 +34,6 @@ import io.legado.app.utils.GSON
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.BookSourceUrlConflict
 import io.legado.app.utils.normalizeBookSourceUrl
-import io.legado.app.utils.classifyBookSourceUrlConflict
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.inputStream
@@ -319,13 +318,17 @@ class BookSourceViewModel(
             is BookSourceIntent.Export -> exportSources(intent.uri, intent.ids)
             is BookSourceIntent.Upload -> uploadSources(intent.ids)
             is BookSourceIntent.ToggleImportItem -> updateImportItems { items ->
-                items.mapIndexed { index, item -> if (index == intent.index) item.copy(isSelected = !item.isSelected) else item }
+                items.mapIndexed { index, item ->
+                    if (index == intent.index && item.status != ImportStatus.InvalidUrl) {
+                        item.copy(isSelected = !item.isSelected)
+                    } else item
+                }
             }
 
             is BookSourceIntent.ToggleImportAll -> updateImportItems { items ->
                 items.map {
                     it.copy(
-                        isSelected = intent.selected
+                        isSelected = intent.selected && it.status != ImportStatus.InvalidUrl
                     )
                 }
             }
@@ -439,7 +442,7 @@ class BookSourceViewModel(
     }
 
     private fun importSources(input: String) {
-        importState.value = BaseImportUiState.Loading
+        importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_reading))
         launch {
             runCatching {
                 val text = if (input.isAbsUrl()) {
@@ -456,20 +459,30 @@ class BookSourceViewModel(
                         .bufferedReader()
                         .use { it.readText() }
                 } else input
+                importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_parsing))
                 val sources = parseImportSources(text)
                 val settings = otherSettingsGateway.currentSettings
+                importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_checking))
                 val localSources = repository.getAll()
-                val localUrls = localSources.map { it.bookSourceUrl }
+                val localByUrl = localSources.associateBy { it.bookSourceUrl }
+                val localIdentities = localSources.mapNotNull { normalizeBookSourceUrl(it.bookSourceUrl) }
+                val localNormalizedUrls = localIdentities.mapTo(hashSetOf()) { it.normalizedUrl }
+                val localHosts = localIdentities.mapTo(hashSetOf()) { it.host }
                 val seen = mutableSetOf<String>()
-                BaseImportUiState.Success(
-                    source = input,
-                    items = sources.map { source ->
-                        val old = repository.getBookSource(source.bookSourceUrl)
+                val wrappers = sources.map { source ->
+                        val old = localByUrl[source.bookSourceUrl]
                         val identity = normalizeBookSourceUrl(source.bookSourceUrl)
                         val duplicateKey = identity?.normalizedUrl ?: source.bookSourceUrl
                         val internalDuplicate = !seen.add(duplicateKey)
-                        val conflict = classifyBookSourceUrlConflict(source.bookSourceUrl, localUrls)
+                        val conflict = when {
+                            identity == null -> BookSourceUrlConflict.Invalid
+                            old != null -> BookSourceUrlConflict.Exact
+                            identity.normalizedUrl in localNormalizedUrls -> BookSourceUrlConflict.Normalized
+                            identity.host in localHosts -> BookSourceUrlConflict.SameHost
+                            else -> BookSourceUrlConflict.None
+                        }
                         val status = when {
+                            identity == null -> ImportStatus.InvalidUrl
                             internalDuplicate -> ImportStatus.InternalDuplicate
                             conflict == BookSourceUrlConflict.Normalized -> ImportStatus.NormalizedConflict
                             conflict == BookSourceUrlConflict.SameHost -> ImportStatus.HostConflict
@@ -486,13 +499,18 @@ class BookSourceViewModel(
                                 ImportStatus.NormalizedConflict -> ImportConflictReason.NormalizedUrl
                                 ImportStatus.HostConflict -> ImportConflictReason.SameHost
                                 ImportStatus.InternalDuplicate -> ImportConflictReason.InternalDuplicate
+                                ImportStatus.InvalidUrl -> ImportConflictReason.InvalidUrl
                                 ImportStatus.Update, ImportStatus.Existing -> ImportConflictReason.ExistingUrl
                                 else -> null
                             },
                             normalizedUrl = identity?.normalizedUrl,
                             host = identity?.host,
                         )
-                    },
+                    }
+                importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_preview))
+                BaseImportUiState.Success(
+                    source = input,
+                    items = wrappers.sortedWith(compareBy { importStatusPriority(it.status) }),
                     keepOriginalName = settings.importKeepName,
                     keepOriginalGroup = settings.importKeepGroup,
                     keepOriginalEnable = settings.importKeepEnable,
@@ -566,7 +584,9 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
     private fun saveImportedSources() {
         val state = importState.value as? BaseImportUiState.Success<BookSource> ?: return
         launch {
-            val sources = state.items.filter { it.isSelected }.map { wrapper ->
+            val sources = state.items.filter {
+                it.isSelected && it.status != ImportStatus.InvalidUrl
+            }.map { wrapper ->
                 wrapper.data.copy().apply {
                     wrapper.oldData?.let { old ->
                         if (state.keepOriginalName) bookSourceName = old.bookSourceName
@@ -627,6 +647,15 @@ private suspend fun parseImportSources(text: String): List<BookSource> {
         }
     }
 
+}
+
+private fun importStatusPriority(status: ImportStatus): Int = when (status) {
+    ImportStatus.NormalizedConflict -> 0
+    ImportStatus.InternalDuplicate -> 1
+    ImportStatus.Update, ImportStatus.Existing -> 2
+    ImportStatus.HostConflict -> 3
+    ImportStatus.InvalidUrl, ImportStatus.Error -> 4
+    ImportStatus.New -> 5
 }
 
 private fun BookSourceCheckOptionsUi.toSettings() = CheckSourceSettings(
