@@ -194,7 +194,7 @@ class ReadHighlightRuleDelegate(
                         status = status,
                         isSelected = status != ImportStatus.Existing,
                     )
-                }
+                }.toImmutableList()
             )
         }.onSuccess { importState ->
             _uiState.update { it.copy(importState = importState) }
@@ -270,7 +270,7 @@ class ReadHighlightRuleDelegate(
         val items = importState.items.toMutableList()
         val item = items[index]
         items[index] = item.copy(isSelected = !item.isSelected)
-        _uiState.update { it.copy(importState = importState.copy(items = items)) }
+        _uiState.update { it.copy(importState = importState.copy(items = items.toImmutableList())) }
     }
 
     fun toggleImportAll(isSelected: Boolean) {
@@ -281,7 +281,7 @@ class ReadHighlightRuleDelegate(
                 importState = importState.copy(
                     items = importState.items.map { item ->
                         item.copy(isSelected = isSelected)
-                    }
+                    }.toImmutableList()
                 )
             )
         }
@@ -296,7 +296,7 @@ class ReadHighlightRuleDelegate(
         _uiState.update {
             it.copy(
                 importState = importState.copy(
-                    items = items,
+                    items = items.toImmutableList(),
                     version = importState.version + 1,
                 )
             )

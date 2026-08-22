@@ -18,6 +18,7 @@ import io.legado.app.ui.widget.components.list.SelectableItem
 import io.legado.app.utils.isAbsUrl
 import io.legado.app.utils.isUri
 import io.legado.app.utils.readText
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
@@ -256,7 +257,7 @@ abstract class BaseRuleViewModel<T : SelectableItem<ID>, Entity, ID, S : ListUiS
 
                 _importState.value = BaseImportUiState.Success(
                     source = text,
-                    items = wrappers
+                    items = wrappers.toImmutableList()
                 )
             }.onFailure {
                 it.printStackTrace()
@@ -292,13 +293,13 @@ abstract class BaseRuleViewModel<T : SelectableItem<ID>, Entity, ID, S : ListUiS
         val newItems = currentState.items.toMutableList()
         val item = newItems[index]
         newItems[index] = item.copy(isSelected = !item.isSelected)
-        _importState.value = currentState.copy(items = newItems)
+        _importState.value = currentState.copy(items = newItems.toImmutableList())
     }
 
     fun toggleImportAll(isSelected: Boolean) {
         val currentState = _importState.value as? BaseImportUiState.Success<Entity> ?: return
         val newItems = currentState.items.map { it.copy(isSelected = isSelected) }
-        _importState.value = currentState.copy(items = newItems)
+        _importState.value = currentState.copy(items = newItems.toImmutableList())
     }
 
     fun updateImportItem(index: Int, data: Entity) {
@@ -307,7 +308,7 @@ abstract class BaseRuleViewModel<T : SelectableItem<ID>, Entity, ID, S : ListUiS
         val newItems = currentState.items.toMutableList()
         newItems[index] = newItems[index].copy(data = data)
         _importState.value = currentState.copy(
-            items = newItems,
+            items = newItems.toImmutableList(),
             version = currentState.version + 1
         )
     }

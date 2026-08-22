@@ -1,8 +1,10 @@
 package io.legado.app.utils
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookSourceUrlNormalizerTest {
@@ -31,7 +33,42 @@ class BookSourceUrlNormalizerTest {
     @Test fun invalidAndEmptyUrlsReturnNull() {
         assertNull(normalizeBookSourceUrl(""))
         assertNull(normalizeBookSourceUrl("not a url"))
+        assertNull(normalizeBookSourceUrl("小说站A"))
         assertNull(normalizeBookSourceUrl("https?://api.example.com/(?!.*newsearch)."))
+    }
+
+    @Test fun usesNormalizedUrlForUrlDuplicateKeyAndRawValueForNameKey() {
+        assertEquals(
+            "https://api.example.com/search",
+            bookSourceImportDuplicateKey(" HTTPS://API.Example.com/search/##已校验"),
+        )
+        assertEquals("小说站A", bookSourceImportDuplicateKey("小说站A"))
+        assertNotEquals(
+            bookSourceImportDuplicateKey("http://api.example.com/search"),
+            bookSourceImportDuplicateKey("https://api.example.com/search"),
+        )
+        assertNotEquals(
+            bookSourceImportDuplicateKey("https://api.example.com:8443/search"),
+            bookSourceImportDuplicateKey("https://api.example.com/search"),
+        )
+        assertNotEquals(
+            bookSourceImportDuplicateKey("https://api.example.com/search?a=1"),
+            bookSourceImportDuplicateKey("https://api.example.com/search?a=2"),
+        )
+    }
+
+    @Test fun identifiesInvalidImportPatterns() {
+        assertTrue(isInvalidBookSourceImportPattern("https?://api.example.com"))
+        assertTrue(isInvalidBookSourceImportPattern("https://api.example.com/(?!.*newsearch)"))
+        assertFalse(isInvalidBookSourceImportPattern("https://api.example.com/search"))
+    }
+
+    @Test fun normalizesIpv6WithoutTreatingColonsAsPortSeparators() {
+        assertEquals(
+            "https://[2001:db8::1]/search",
+            normalizeBookSourceUrl("https://[2001:DB8::1]/search")?.normalizedUrl,
+        )
+        assertEquals("2001:db8::1", normalizeBookSourceUrl("https://[2001:DB8::1]/search")?.host)
     }
 
     @Test fun stripsBookSourceAnnotations() {
@@ -51,8 +88,6 @@ class BookSourceUrlNormalizerTest {
             "https://网易云音乐.luoyacheng.ip-ddns.com",
             normalizeBookSourceUrl("https://\n网易云音乐.luoyacheng.ip-ddns.com")?.normalizedUrl
         )
-        assert(isUsableBookSourceUrl("novel.html5.qq.com"))
-        assert(!isUsableBookSourceUrl("https?://example.com"))
     }
 
     @Test fun classifiesConflictByFullHostName() {

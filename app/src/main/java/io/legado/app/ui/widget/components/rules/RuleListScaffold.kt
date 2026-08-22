@@ -53,6 +53,9 @@ fun <T> RuleListScaffold(
     onSelectInvert: () -> Unit,
     selectionSecondaryActions: List<ActionItem>,
     onDeleteSelected: (Set<Any>) -> Unit,
+    // 可由页面托管删除目标，用于复用通用确认框处理单项删除。
+    deleteIds: Set<Any>? = null,
+    onDeleteIdsChange: ((Set<Any>?) -> Unit)? = null,
     onAddClick: (() -> Unit)? = null,
     floatingActionButton: @Composable () -> Unit = {
         onAddClick?.let { onClick ->
@@ -70,20 +73,24 @@ fun <T> RuleListScaffold(
     snackbarHostState: SnackbarHostState,
     content: @Composable (PaddingValues) -> Unit
 ) {
-    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var internalDeleteIds by remember { mutableStateOf<Set<Any>?>(null) }
+    val pendingDeleteIds = deleteIds ?: internalDeleteIds
+    val setDeleteIds: (Set<Any>?) -> Unit = { ids ->
+        if (onDeleteIdsChange != null) onDeleteIdsChange(ids) else internalDeleteIds = ids
+    }
 
     AppAlertDialog(
-        show = showDeleteConfirmDialog,
-        onDismissRequest = { showDeleteConfirmDialog = false },
+        show = pendingDeleteIds != null,
+        onDismissRequest = { setDeleteIds(null) },
         title = stringResource(R.string.delete),
         text = stringResource(R.string.sure_del),
         confirmText = stringResource(R.string.ok),
         onConfirm = {
-            onDeleteSelected(state.selectedIds)
-            showDeleteConfirmDialog = false
+            pendingDeleteIds?.let(onDeleteSelected)
+            setDeleteIds(null)
         },
         dismissText = stringResource(R.string.cancel),
-        onDismiss = { showDeleteConfirmDialog = false }
+        onDismiss = { setDeleteIds(null) }
     )
 
     ListScaffold(
@@ -107,7 +114,7 @@ fun <T> RuleListScaffold(
             primaryAction = ActionItem(
                 text = stringResource(R.string.delete),
                 icon = Icons.Default.Delete,
-                onClick = { showDeleteConfirmDialog = true }
+                onClick = { setDeleteIds(state.selectedIds) }
             ),
             secondaryActions = selectionSecondaryActions
         ),

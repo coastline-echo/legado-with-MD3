@@ -1,12 +1,17 @@
 package io.legado.app.ui.widget.components.importComponents
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+import kotlinx.collections.immutable.ImmutableList
 
 // 单个条目的状态包装
+@Stable
 data class ImportItemWrapper<T>(
     val data: T,// 具体的数据对象（替换规则、书源等）
     val oldData: T? = null,
     val isSelected: Boolean = true,
+    val isSelectable: Boolean = true,
+    val canKeepBoth: Boolean = true,
     val status: ImportStatus = ImportStatus.New, // 用于UI显示颜色
     val conflictReason: ImportConflictReason? = null,
     val normalizedUrl: String? = null,
@@ -32,6 +37,8 @@ enum class ImportDecision {
 }
 
 enum class ImportConflictReason {
+    RawSourceKey,
+    MissingSourceKey,
     NormalizedUrl,
     SameHost,
     InternalDuplicate,
@@ -47,10 +54,12 @@ enum class ImportStatus {
     New,      // 新增 绿
     Update,   // 更新 黄
     Existing, // 已有 灰
+    RawSourceKeyConflict,
     NormalizedConflict,
     HostConflict,
     InternalDuplicate,
     InvalidUrl,
+    MissingSourceKey,
     IncompleteImport,
     IncompleteLocal,
     Error     // 错误 红
@@ -61,9 +70,10 @@ sealed interface BaseImportUiState<out T> {
     data object Idle : BaseImportUiState<Nothing>
     data class Loading(val message: String? = null) : BaseImportUiState<Nothing>
     data class Error(val msg: String) : BaseImportUiState<Nothing>
+    @Stable
     data class Success<T>(
         val source: String,
-        val items: List<ImportItemWrapper<T>>,
+        val items: ImmutableList<ImportItemWrapper<T>>,
         val version: Int = 0,
         // 导入配置项
         val keepOriginalName: Boolean = false,

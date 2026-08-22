@@ -23,19 +23,32 @@ fun normalizeBookSourceUrl(value: String): BookSourceUrlIdentity? {
         .substringBefore("#")
         .trimEnd('/')
     if (cleaned.isEmpty()) return null
+    // 旧书源可能使用显示名称作为 bookSourceUrl。只有看起来像 URL 的值参与
+    // URL 身份比较；任意自定义主键都必须按原文保存，不能猜测成主机名。
+    val hasExplicitScheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*://").containsMatchIn(cleaned)
+    val withoutScheme = cleaned.substringAfter("://", cleaned)
+    val looksLikeHost = withoutScheme.startsWith("[") ||
+        withoutScheme.substringBefore('/').substringBefore('?').contains('.')
+    if (!hasExplicitScheme && !looksLikeHost) return null
     if (cleaned.contains(Regex("^https\\?://", RegexOption.IGNORE_CASE)) ||
         cleaned.contains("(?!") || cleaned.contains(".*")
     ) return null
-    val hasScheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*://").containsMatchIn(cleaned)
-    val parseValue = if (hasScheme) cleaned else "https://$cleaned"
+    val parseValue = if (hasExplicitScheme) cleaned else "https://$cleaned"
     val uri = runCatching { URI(parseValue) }.getOrNull() ?: return null
     val scheme = uri.scheme ?: return null
     val authority = uri.rawAuthority?.substringAfterLast('@') ?: return null
-    val host = authority.substringBefore(':').trim('[', ']').lowercase(Locale.ROOT)
+    val authorityHost = authority.substringBefore('/').substringBefore('?')
+        .substringAfterLast('@')
+    val host = when {
+        authorityHost.startsWith("[") -> authorityHost.substringBefore(']').trimStart('[')
+        else -> authorityHost.substringBeforeLast(':').takeIf {
+            authorityHost.count { char -> char == ':' } == 1
+        } ?: authorityHost
+    }.lowercase(Locale.ROOT)
     if (host.isEmpty()) return null
     val normalizedAuthority = buildString {
         uri.userInfo?.let { append(it).append('@') }
-        append(host)
+        if (host.contains(':')) append('[').append(host).append(']') else append(host)
         if (uri.port != -1) append(':').append(uri.port)
     }
     val path = uri.rawPath.orEmpty().trimEnd('/')
@@ -47,13 +60,17 @@ fun normalizeBookSourceUrl(value: String): BookSourceUrlIdentity? {
     return BookSourceUrlIdentity(normalized, host)
 }
 
-/** 导入兼容性检查。为兼容旧书源只要求地址非空；严格 URI 解析留给判重提示和运行时请求校验。 */
-fun isUsableBookSourceUrl(value: String): Boolean {
-    val cleaned = value.trim()
-    return cleaned.isNotEmpty() &&
-        !cleaned.contains(Regex("^https\\?://", RegexOption.IGNORE_CASE)) &&
-        !cleaned.contains("(?!") && !cleaned.contains(".*")
-}
+/**
+ * 返回导入文件内部判重使用的键。
+ * URL 型标识按规范化地址比较；名称型标识按原始值比较，避免猜测其网络含义。
+ */
+fun bookSourceImportDuplicateKey(value: String): String =
+    normalizeBookSourceUrl(value)?.normalizedUrl ?: value
+
+/** 识别不能作为书源地址保存的正则式地址写法。 */
+fun isInvalidBookSourceImportPattern(value: String): Boolean =
+    value.contains(Regex("^https\\?://", RegexOption.IGNORE_CASE)) ||
+        value.contains("(?!") || value.contains(".*")
 
 enum class BookSourceUrlConflict {
     None, Exact, Normalized, SameHost, Invalid

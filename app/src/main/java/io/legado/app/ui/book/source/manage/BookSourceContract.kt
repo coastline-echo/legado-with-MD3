@@ -54,7 +54,8 @@ data class BookSourceUiState(
     val importState: BaseImportUiState<BookSource> = BaseImportUiState.Idle,
     val checkProgress: String? = null,
     val checkOptions: BookSourceCheckOptionsUi = BookSourceCheckOptionsUi(),
-    val interaction: InteractionState = InteractionState(isLoading = true),
+    // 导入过程由独立的批量弹窗展示，不能让书源列表进入页面级 loading。
+    val interaction: InteractionState = InteractionState(),
 ) : ListUiState<BookSourceItemUi> {
     override val isSearch get() = interaction.isSearchMode
     override val isLoading get() = interaction.isLoading

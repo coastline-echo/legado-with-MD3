@@ -62,8 +62,8 @@ import kotlinx.coroutines.flow.collect
 @Composable
 fun SourceInputDialog(
     show: Boolean,
-    title: String = "网络导入",
-    hint: String = "请输入 URL 或 JSON",
+    title: String = stringResource(R.string.import_network_title),
+    hint: String = stringResource(R.string.import_source_input_hint),
     initialValue: String = "",
     historyValues: List<String> = emptyList(),
     onDismissRequest: () -> Unit,
@@ -130,6 +130,8 @@ fun <T> BatchImportDialog(
     onSetItemDecision: ((index: Int, decision: ImportDecision) -> Unit)? = null,
     itemDecisionLabel: @Composable (decision: ImportDecision?) -> String? = { null },
     itemCanKeepBoth: (item: ImportItemWrapper<T>) -> Boolean = { true },
+    itemCanSelect: (item: ImportItemWrapper<T>) -> Boolean = { true },
+    onItemBlockedClick: (item: ImportItemWrapper<T>) -> Unit = {},
 ) {
     val loadingState = importState as? BaseImportUiState.Loading
     AppModalBottomSheet(
@@ -177,9 +179,7 @@ fun <T> BatchImportDialog(
     val isEditing = editingItem != null
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
-    val selectableCount = currentState.items.count {
-        it.status != ImportStatus.InvalidUrl && it.status != ImportStatus.InternalDuplicate
-    }
+    val selectableCount = currentState.items.count(itemCanSelect)
     val allSelected = selectableCount > 0 && selectedCount == selectableCount
     val sheetTitle = when {
         isEditing -> itemTitle(editingItem.data)
@@ -267,12 +267,15 @@ fun <T> BatchImportDialog(
                         currentState.items,
                         key = { _, item -> item.data.hashCode() }
                     ) { index, itemWrapper ->
+                        val canSelect = itemCanSelect(itemWrapper)
                         ImportItemRow(
                             title = itemTitle(itemWrapper.data),
                             subtitle = itemConflictSubtitle(itemWrapper),
                             isSelected = itemWrapper.isSelected,
                             status = itemWrapper.status,
-                            onClick = { onToggleItem(index) },
+                            onClick = {
+                                if (canSelect) onToggleItem(index) else onItemBlockedClick(itemWrapper)
+                            },
                             onInfoClick = {
                                 onItemInfoClick(index)
                                 editingIndex = index
@@ -283,6 +286,7 @@ fun <T> BatchImportDialog(
                             onDecisionClick = onSetItemDecision?.let { callback ->
                                 { decision -> callback(index, decision) }
                             },
+                            isSelectable = canSelect,
                         )
                     }
                 }
@@ -386,13 +390,14 @@ fun ImportItemRow(
     decisionLabel: String? = null,
     onDecisionClick: ((ImportDecision) -> Unit)? = null,
     canKeepBoth: Boolean = true,
+    isSelectable: Boolean = true,
 ) {
     SelectionItemCard(
         title = title,
         titleMaxLines = 2,
         subtitle = subtitle,
         isSelected = isSelected,
-        inSelectionMode = true,
+        inSelectionMode = isSelectable,
         onToggleSelection = onClick,
         containerColor = LegadoTheme.colorScheme.onSheetContent,
         trailingAction = {
@@ -401,10 +406,12 @@ fun ImportItemRow(
                     ImportStatus.New -> stringResource(R.string.import_status_new)
                     ImportStatus.Update -> stringResource(R.string.import_status_update)
                     ImportStatus.Existing -> stringResource(R.string.import_status_existing)
+                    ImportStatus.RawSourceKeyConflict -> stringResource(R.string.import_status_raw_source_key_conflict)
                     ImportStatus.NormalizedConflict -> stringResource(R.string.import_status_normalized_conflict)
                     ImportStatus.HostConflict -> stringResource(R.string.import_status_host_conflict)
                     ImportStatus.InternalDuplicate -> stringResource(R.string.import_status_internal_duplicate)
                     ImportStatus.InvalidUrl -> stringResource(R.string.import_status_invalid_url)
+                    ImportStatus.MissingSourceKey -> stringResource(R.string.import_status_missing_source_key)
                     ImportStatus.IncompleteImport -> stringResource(R.string.import_status_incomplete_import)
                     ImportStatus.IncompleteLocal -> stringResource(R.string.import_status_incomplete_local)
                     ImportStatus.Error -> stringResource(R.string.import_status_error)
@@ -414,7 +421,7 @@ fun ImportItemRow(
                     ImportStatus.New -> LegadoTheme.colorScheme.primary
                     ImportStatus.Update -> LegadoTheme.colorScheme.secondary
                     ImportStatus.Error -> LegadoTheme.colorScheme.error
-                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate, ImportStatus.InvalidUrl -> LegadoTheme.colorScheme.error
+                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate, ImportStatus.InvalidUrl, ImportStatus.MissingSourceKey -> LegadoTheme.colorScheme.error
                     ImportStatus.HostConflict -> LegadoTheme.colorScheme.secondary
                     ImportStatus.IncompleteImport, ImportStatus.IncompleteLocal -> LegadoTheme.colorScheme.error
                     else -> LegadoTheme.colorScheme.outline
@@ -422,7 +429,7 @@ fun ImportItemRow(
                 modifier = Modifier.padding(end = 4.dp)
             )
 
-            if (decisionLabel != null) {
+            if (decisionLabel != null && isSelectable) {
                 SmallPlainButton(
                     onClick = {
                         val next = when (decision) {
@@ -434,7 +441,10 @@ fun ImportItemRow(
                         onDecisionClick?.invoke(next)
                     },
                     text = decisionLabel,
-                    enabled = onDecisionClick != null && status != ImportStatus.InvalidUrl,
+                    enabled = onDecisionClick != null &&
+                        status != ImportStatus.InvalidUrl &&
+                        status != ImportStatus.MissingSourceKey &&
+                        status != ImportStatus.InternalDuplicate,
                     contentDescription = decisionLabel,
                 )
             }

@@ -864,7 +864,7 @@ class CloudTtsViewModel(
                 }
             }
             if (items.isEmpty()) throw NoStackTraceException(application.getString(R.string.wrong_format))
-            BaseImportUiState.Success(source, items)
+            BaseImportUiState.Success(source, items.toImmutableList())
         }.onSuccess { result -> _uiState.update { it.copy(httpTtsImportState = result) } }
             .onFailure { error ->
                 _uiState.update {
@@ -905,7 +905,9 @@ class CloudTtsViewModel(
         if (index !in state.items.indices) return
         val items = state.items.toMutableList()
         items[index] = items[index].copy(isSelected = !items[index].isSelected)
-        _uiState.update { it.copy(httpTtsImportState = state.copy(items = items)) }
+        _uiState.update {
+            it.copy(httpTtsImportState = state.copy(items = items.toImmutableList()))
+        }
     }
 
     private fun toggleHttpTtsImportAll(selected: Boolean) {
@@ -914,7 +916,7 @@ class CloudTtsViewModel(
         _uiState.update {
             it.copy(
                 httpTtsImportState = state.copy(
-                items = state.items.map { item -> item.copy(isSelected = selected) }
+                items = state.items.map { item -> item.copy(isSelected = selected) }.toImmutableList()
             ))
         }
     }
@@ -928,7 +930,7 @@ class CloudTtsViewModel(
         _uiState.update {
             it.copy(
                 httpTtsImportState = state.copy(
-                    items = items,
+                    items = items.toImmutableList(),
                     version = state.version + 1
                 )
             )

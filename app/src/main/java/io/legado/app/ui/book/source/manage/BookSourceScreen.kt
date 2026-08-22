@@ -78,6 +78,7 @@ import io.legado.app.ui.widget.components.rules.RuleListScaffold
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
+import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.flow.collectLatest
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -329,18 +330,23 @@ fun BookSourceScreen(
         itemConflictSubtitle = { item ->
             buildString {
                 append(item.data.bookSourceUrl)
-                item.conflictReason?.let {
-                    val reason = when (it) {
+                val conflictReason = item.conflictReason
+                if (conflictReason != null) {
+                    val reason = when (conflictReason) {
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.NormalizedUrl ->
                             stringResource(R.string.import_conflict_normalized_url)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.SameHost ->
                             stringResource(R.string.import_conflict_same_host)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InternalDuplicate ->
                             stringResource(R.string.import_conflict_internal_duplicate)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.RawSourceKey ->
+                            stringResource(R.string.import_conflict_raw_source_key)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.ExistingUrl ->
                             stringResource(R.string.import_conflict_existing_url)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidUrl ->
                             stringResource(R.string.import_status_invalid_url)
+                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.MissingSourceKey ->
+                            stringResource(R.string.import_status_missing_source_key)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidPattern ->
                             stringResource(R.string.import_status_invalid_pattern)
                         io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteImport ->
@@ -350,33 +356,50 @@ fun BookSourceScreen(
                     }
                     append("\n").append(reason)
                 }
-                item.normalizedUrl?.let { normalized ->
-                    append("\n").append(stringResource(R.string.import_detail_normalized, normalized))
+                if (item.normalizedUrl != null) {
+                    append("\n").append(stringResource(R.string.import_detail_normalized, item.normalizedUrl))
                 }
-                item.host?.let { host ->
-                    append("\n").append(stringResource(R.string.import_detail_host, host))
+                if (item.host != null) {
+                    append("\n").append(stringResource(R.string.import_detail_host, item.host))
                 }
-                item.searchUrlHint?.let { sourceName ->
-                    append("\n").append(stringResource(R.string.import_detail_search_url_hint, sourceName))
+                if (item.searchUrlHint != null) {
+                    append("\n").append(stringResource(R.string.import_detail_search_url_hint, item.searchUrlHint))
                 }
-                (item.oldData as? io.legado.app.data.entities.BookSource)?.let { local ->
+                val local = item.oldData as? io.legado.app.data.entities.BookSource
+                if (local != null) {
                     append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
                     val imported = item.data
-                    val changed = buildList {
-                        if (imported.bookSourceName != local.bookSourceName) add(stringResource(R.string.import_diff_name))
-                        if (imported.bookSourceGroup != local.bookSourceGroup) add(stringResource(R.string.import_diff_group))
-                        if (imported.bookSourceType != local.bookSourceType) add(stringResource(R.string.import_diff_type))
-                        if (imported.lastUpdateTime != local.lastUpdateTime) add(stringResource(R.string.import_diff_update_time))
-                        if ((imported.ruleSearch != null) != (local.ruleSearch != null)) add(stringResource(R.string.import_diff_search_rule))
-                        if ((imported.ruleExplore != null) != (local.ruleExplore != null)) add(stringResource(R.string.import_diff_explore_rule))
-                        if ((imported.ruleBookInfo != null) != (local.ruleBookInfo != null)) add(stringResource(R.string.import_diff_info_rule))
-                        if ((imported.ruleToc != null) != (local.ruleToc != null)) add(stringResource(R.string.import_diff_toc_rule))
-                        if ((imported.ruleContent != null) != (local.ruleContent != null)) add(stringResource(R.string.import_diff_content_rule))
-                    }
+                    val changed = mutableListOf<String>()
+                    if (imported.bookSourceName != local.bookSourceName) changed += stringResource(R.string.import_diff_name)
+                    if (imported.bookSourceGroup != local.bookSourceGroup) changed += stringResource(R.string.import_diff_group)
+                    if (imported.bookSourceType != local.bookSourceType) changed += stringResource(R.string.import_diff_type)
+                    if (imported.lastUpdateTime != local.lastUpdateTime) changed += stringResource(R.string.import_diff_update_time)
+                    if ((imported.ruleSearch != null) != (local.ruleSearch != null)) changed += stringResource(R.string.import_diff_search_rule)
+                    if ((imported.ruleExplore != null) != (local.ruleExplore != null)) changed += stringResource(R.string.import_diff_explore_rule)
+                    if ((imported.ruleBookInfo != null) != (local.ruleBookInfo != null)) changed += stringResource(R.string.import_diff_info_rule)
+                    if ((imported.ruleToc != null) != (local.ruleToc != null)) changed += stringResource(R.string.import_diff_toc_rule)
+                    if ((imported.ruleContent != null) != (local.ruleContent != null)) changed += stringResource(R.string.import_diff_content_rule)
                     if (changed.isNotEmpty()) {
                         append("\n").append(stringResource(R.string.import_detail_differences, changed.joinToString("、")))
                     }
-                    item.localMetadata?.let { metadata ->
+                    val incompleteSource = when (item.status) {
+                        ImportStatus.IncompleteImport -> imported
+                        ImportStatus.IncompleteLocal -> local
+                        else -> null
+                    }
+                    val ruleIds = incompleteSource?.missingRuleResIds().orEmpty()
+                    if (ruleIds.isNotEmpty()) {
+                        val missingRules = mutableListOf<String>()
+                        for (ruleId in ruleIds) missingRules += stringResource(ruleId)
+                        append("\n").append(
+                            stringResource(
+                                R.string.import_missing_rules,
+                                missingRules.joinToString("、"),
+                            )
+                        )
+                    }
+                    val metadata = item.localMetadata
+                    if (metadata != null) {
                         append("\n").append(
                             stringResource(
                                 R.string.import_detail_local_usage,
@@ -400,11 +423,14 @@ fun BookSourceScreen(
                 ImportDecision.Skip, null -> stringResource(R.string.import_decision_skip)
             }
         },
-        itemCanKeepBoth = { item ->
-            val local = item.oldData
-            item.status != ImportStatus.NormalizedConflict &&
-                item.status != ImportStatus.InternalDuplicate &&
-                (local == null || local.bookSourceUrl != item.data.bookSourceUrl)
+        itemCanKeepBoth = { it.canKeepBoth },
+        itemCanSelect = { it.isSelectable },
+        onItemBlockedClick = { item ->
+            if (item.status == ImportStatus.InternalDuplicate) {
+                context.toastOnUi(context.getString(R.string.import_status_internal_duplicate))
+            } else if (item.status == ImportStatus.MissingSourceKey) {
+                context.toastOnUi(context.getString(R.string.import_status_missing_source_key))
+            }
         },
     )
 
@@ -503,15 +529,6 @@ fun BookSourceScreen(
         onUpdateGroup = { old, new -> onIntent(BookSourceIntent.UpdateGroup(old, new)) },
         onDeleteGroup = { onIntent(BookSourceIntent.DeleteGroup(it)) }
     )
-    AppAlertDialog(
-        deleteIds,
-        { deleteIds = null },
-        stringResource(R.string.delete),
-        confirmText = stringResource(R.string.ok),
-        onConfirm = { ids -> onIntent(BookSourceIntent.Delete(ids)); deleteIds = null },
-        dismissText = stringResource(R.string.cancel),
-        onDismiss = { deleteIds = null })
-
     RuleListScaffold(
         title = stringResource(R.string.book_source),
         subtitle = state.groupFilterName ?: stringResource(R.string.all),
@@ -606,7 +623,12 @@ fun BookSourceScreen(
                 showExportSheet = true
             },
         ),
-        onDeleteSelected = { deleteIds = it as Set<String> },
+        onDeleteSelected = { ids ->
+            @Suppress("UNCHECKED_CAST")
+            onIntent(BookSourceIntent.Delete(ids as Set<String>))
+        },
+        deleteIds = deleteIds,
+        onDeleteIdsChange = { deleteIds = it?.mapNotNull { id -> id as? String }?.toSet() },
         dropDownMenuContent = { dismiss ->
             RoundDropdownMenuItem(
                 text = stringResource(R.string.group_manage),
@@ -812,6 +834,14 @@ fun BookSourceScreen(
             )
         }
     }
+}
+
+private fun io.legado.app.data.entities.BookSource.missingRuleResIds(): List<Int> = buildList {
+    if (ruleSearch == null) add(R.string.source_tab_search)
+    if (ruleExplore == null) add(R.string.source_tab_find)
+    if (ruleBookInfo == null) add(R.string.source_tab_info)
+    if (ruleToc == null) add(R.string.source_tab_toc)
+    if (ruleContent == null) add(R.string.source_tab_content)
 }
 
 @Composable
