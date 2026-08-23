@@ -20,7 +20,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
@@ -28,7 +27,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,8 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.google.gson.JsonElement
 import com.google.gson.JsonNull
 import com.google.gson.JsonObject
@@ -53,12 +49,10 @@ import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
-import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
-import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.GSON
@@ -139,30 +133,20 @@ fun <T> BatchImportDialog(
     onItemBlockedClick: (item: ImportItemWrapper<T>) -> Unit = {},
 ) {
     val loadingState = importState as? BaseImportUiState.Loading
-    // 处理中使用独立 Dialog，避免两种主题的底部弹窗宿主扩展成整页窗口。
-    if (loadingState != null) {
-        Dialog(
-            onDismissRequest = onDismissRequest,
-            properties = DialogProperties(
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false,
-            ),
+    // 大文件处理期间只显示阶段文字，保留书源管理页面和底部提示，不显示无感知的旋转齿轮。
+    AppModalBottomSheet(
+        show = loadingState != null,
+        onDismissRequest = onDismissRequest,
+        title = loadingState?.message ?: stringResource(R.string.loading),
+        modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.35f),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 20.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Surface(
-                modifier = Modifier.padding(24.dp),
-                color = LegadoTheme.colorScheme.surfaceContainer,
-                contentColor = LegadoTheme.colorScheme.onSurface,
-                shape = RoundedCornerShape(28.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    AppCircularProgressIndicator()
-                    AppText(loadingState.message ?: "")
-                }
-            }
+            AppText(loadingState?.message ?: stringResource(R.string.loading))
         }
     }
 
