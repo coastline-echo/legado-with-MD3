@@ -175,6 +175,7 @@ import io.legado.app.domain.usecase.BatchCacheDownloadUseCase
 import io.legado.app.domain.usecase.BuildSpeechPlanUseCase
 import io.legado.app.domain.usecase.CacheBookChaptersUseCase
 import io.legado.app.domain.usecase.ChangeBookSourceUseCase
+import io.legado.app.domain.usecase.BookSourceDedupUseCase
 import io.legado.app.domain.usecase.ChangeSourceSearchUseCase
 import io.legado.app.domain.usecase.CleanSelectedTextUseCase
 import io.legado.app.domain.usecase.ClearBookCacheUseCase
@@ -427,6 +428,7 @@ val appModule = module {
     singleOf(::SyncReadAloudVoicesUseCase)
     singleOf(::CacheBookChaptersUseCase)
     singleOf(::ChangeBookSourceUseCase)
+    singleOf(::BookSourceDedupUseCase)
     singleOf(::ClearBookCacheUseCase)
     singleOf(::CoverAlbumUseCase)
     singleOf(::DeleteBooksUseCase)

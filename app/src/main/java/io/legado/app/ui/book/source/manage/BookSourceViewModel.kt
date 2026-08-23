@@ -22,6 +22,10 @@ import io.legado.app.domain.gateway.CheckSourceSettings
 import io.legado.app.domain.gateway.CheckSourceSettingsGateway
 import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.help.book.ContentProcessor
+import io.legado.app.domain.usecase.BookSourceDedupUseCase
+import io.legado.app.domain.usecase.BookSourceMatchType
+import io.legado.app.domain.usecase.ChangeBookSourceUseCase
+import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
 import io.legado.app.help.http.decompressed
 import io.legado.app.help.http.newCallResponseBody
 import io.legado.app.help.http.okHttpClient
@@ -69,6 +73,8 @@ class BookSourceViewModel(
     private val otherSettingsGateway: OtherSettingsGateway,
     private val checkGateway: BookSourceCheckGateway,
     private val checkSettingsGateway: CheckSourceSettingsGateway,
+    private val dedupUseCase: BookSourceDedupUseCase,
+    private val changeBookSourceUseCase: ChangeBookSourceUseCase,
 ) : ViewModel() {
     companion object {
         const val FILTER_ENABLED = "@enabled"
@@ -91,6 +97,11 @@ class BookSourceViewModel(
     private val enabledOverrides = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     private val importState =
         MutableStateFlow<BaseImportUiState<BookSource>>(BaseImportUiState.Idle)
+    private val dedupGroups = MutableStateFlow<List<BookSourceDedupGroupUi>>(emptyList())
+    private val dedupScanning = MutableStateFlow(false)
+    private val dedupRetained = MutableStateFlow<Set<String>>(emptySet())
+    private val dedupIgnored = MutableStateFlow<Set<String>>(emptySet())
+    private val deletePreview = MutableStateFlow<BookSourceDeletePreviewUi?>(null)
     private val _effects = MutableSharedFlow<BookSourceEffect>(extraBufferCapacity = 16)
     val effects = _effects.asSharedFlow()
 
@@ -221,12 +232,30 @@ class BookSourceViewModel(
         val enabledOverrides: Map<String, Boolean>,
     )
 
+    private val dedupState = combine(
+        dedupGroups,
+        dedupScanning,
+        dedupRetained,
+        dedupIgnored,
+    ) { groups, scanning, retained, ignored ->
+        DedupState(groups, scanning, retained, ignored)
+    }
+
+    private data class DedupState(
+        val groups: List<BookSourceDedupGroupUi>,
+        val scanning: Boolean,
+        val retained: Set<String>,
+        val ignored: Set<String>,
+    )
+
     val uiState = combine(
         listState,
         importState,
         checkGateway.state,
         checkSettingsGateway.settings,
-    ) { state, importing, check, settings ->
+        dedupState,
+        deletePreview,
+    ) { state, importing, check, settings, dedup, deleting ->
         state.copy(
             items = state.items.map { item ->
                 item.copy(
@@ -249,6 +278,16 @@ class BookSourceViewModel(
                 checkCategory = settings.checkCategory,
                 checkContent = settings.checkContent,
             ),
+            dedupGroups = dedup.groups.map { group ->
+                group.copy(
+                    ignored = group.sources.any { it.sourceUrl in dedup.ignored },
+                    sources = group.sources.map { source ->
+                        source.copy(retained = source.sourceUrl in dedup.retained)
+                    }.toImmutableList(),
+                )
+            }.toImmutableList(),
+            dedupScanning = dedup.scanning,
+            deletePreview = deleting,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BookSourceUiState())
 
@@ -290,7 +329,14 @@ class BookSourceViewModel(
             }
 
             is BookSourceIntent.SetExploreEnabled -> updateExplore(intent.ids, intent.enabled)
-            is BookSourceIntent.Delete -> launch { repository.deleteSourceParts(parts(intent.ids)); selectedIds.update { it - intent.ids } }
+            is BookSourceIntent.Delete -> prepareDelete(intent.ids)
+            is BookSourceIntent.PrepareDelete -> prepareDelete(intent.ids)
+            BookSourceIntent.CancelDelete -> deletePreview.value = null
+            BookSourceIntent.ConfirmDirectDelete -> confirmDirectDelete()
+            BookSourceIntent.ConfirmChangeSourceDelete -> confirmChangeSourceDelete()
+            is BookSourceIntent.SelectDeleteTarget -> deletePreview.update {
+                it?.copy(recommendedTargetSourceUrl = intent.sourceUrl)
+            }
             is BookSourceIntent.MoveToEdge -> moveToEdge(intent.ids, intent.toTop)
             is BookSourceIntent.MoveItem -> moveItem(intent.from, intent.to)
             BookSourceIntent.SaveSortOrder -> saveSortOrder()
@@ -320,6 +366,13 @@ class BookSourceViewModel(
             }
 
             BookSourceIntent.CancelCheck -> _effects.tryEmit(BookSourceEffect.CancelCheck)
+            BookSourceIntent.ScanDuplicateSources -> scanDuplicateSources()
+            is BookSourceIntent.ToggleDedupRetained -> dedupRetained.update {
+                if (intent.sourceUrl in it) it - intent.sourceUrl else it + intent.sourceUrl
+            }
+            is BookSourceIntent.IgnoreDedupGroup -> dedupIgnored.update {
+                if (intent.sourceUrl in it) it - intent.sourceUrl else it + intent.sourceUrl
+            }
             is BookSourceIntent.Import -> importSources(intent.text)
             is BookSourceIntent.Export -> exportSources(intent.uri, intent.ids)
             is BookSourceIntent.Upload -> uploadSources(intent.ids)
@@ -393,6 +446,131 @@ class BookSourceViewModel(
 
             BookSourceIntent.CancelImport -> importState.value = BaseImportUiState.Idle
             BookSourceIntent.SaveImportedSources -> saveImportedSources()
+        }
+    }
+
+    private fun scanDuplicateSources() {
+        if (dedupScanning.value) return
+        viewModelScope.launch {
+            dedupScanning.value = true
+            runCatching { dedupUseCase.scan(checkGateway.state.value) }
+                .onSuccess { groups ->
+                    dedupGroups.value = groups.map { group ->
+                        BookSourceDedupGroupUi(
+                            matchType = group.matchType,
+                            sources = group.sources.map { profile ->
+                                BookSourceDedupSourceUi(
+                                    sourceUrl = profile.source.bookSourceUrl,
+                                    name = profile.source.bookSourceName,
+                                    referencedBookCount = profile.referencedBookCount,
+                                    score = profile.score,
+                                    reasons = profile.reasons.toImmutableList(),
+                                    hasCookie = profile.hasCookie,
+                                    hasVariablesOrCache = profile.hasVariablesOrCache,
+                                    rules = profile.rules,
+                                    retained = profile.source.bookSourceUrl in dedupRetained.value,
+                                )
+                            }.toImmutableList(),
+                            recommendedSourceUrl = group.recommendation.sourceUrl,
+                            ignored = group.sources.any { it.source.bookSourceUrl in dedupIgnored.value },
+                        )
+                    }
+                }
+                .onFailure {
+                    _effects.tryEmit(
+                        BookSourceEffect.ShowSnackbar(
+                            application.getString(io.legado.app.R.string.book_source_duplicate_scan_failed)
+                        )
+                    )
+                }
+            dedupScanning.value = false
+        }
+    }
+
+    private fun prepareDelete(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val targetUrls = dedupGroups.value
+                .firstOrNull {
+                    it.matchType == BookSourceMatchType.NormalizedUrl &&
+                        it.sources.any { source -> source.sourceUrl in ids }
+                }
+                ?.sources
+                ?.map { it.sourceUrl }
+                ?.filterNot { it in ids }
+                ?.distinct()
+                .orEmpty()
+            deletePreview.value = BookSourceDeletePreviewUi(
+                sourceUrls = ids.toImmutableSet(),
+                loading = true,
+            )
+            val previews = ids.mapNotNull { dedupUseCase.previewDelete(it) }
+            deletePreview.value = BookSourceDeletePreviewUi(
+                sourceUrls = previews.map { it.source.bookSourceUrl }.toImmutableSet(),
+                referencedBookCount = previews.sumOf { it.referencedBooks.size },
+                hasCookie = previews.any { it.hasCookie },
+                hasVariablesOrCache = previews.any { it.hasVariablesOrCache },
+                recommendedTargetSourceUrl = dedupGroups.value
+                    .firstOrNull {
+                        it.matchType == BookSourceMatchType.NormalizedUrl &&
+                            it.sources.any { source -> source.sourceUrl in ids }
+                    }
+                    ?.sources
+                    ?.firstOrNull { it.sourceUrl !in ids }
+                    ?.sourceUrl,
+                targetSourceUrls = targetUrls.toImmutableList(),
+            )
+        }
+    }
+
+    private fun confirmDirectDelete() {
+        val ids = deletePreview.value?.sourceUrls ?: return
+        deletePreview.value = null
+        launch {
+            repository.deleteSourceParts(parts(ids))
+            selectedIds.update { it - ids }
+        }
+    }
+
+    private fun confirmChangeSourceDelete() {
+        val preview = deletePreview.value ?: return
+        val targetUrl = preview.recommendedTargetSourceUrl ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val target = repository.getBookSource(targetUrl)
+            if (target == null) {
+                _effects.emit(
+                    BookSourceEffect.ShowSnackbar(
+                        application.getString(io.legado.app.R.string.book_source_delete_target_missing)
+                    )
+                )
+                return@launch
+            }
+            val books = preview.sourceUrls.flatMap { database.bookDao.getByOrigin(it) }
+            val result = changeBookSourceUseCase.batchChangeTo(
+                books = books,
+                source = target,
+                options = ChangeSourceMigrationOptions(),
+                onProgress = { _, _, _ -> },
+            )
+            if (result.failedCount > 0) {
+                _effects.emit(
+                    BookSourceEffect.ShowSnackbar(
+                        application.getString(
+                            io.legado.app.R.string.book_source_delete_change_failed,
+                            result.failedCount,
+                        )
+                    )
+                )
+                return@launch
+            }
+            repository.deleteSourceParts(parts(preview.sourceUrls))
+            selectedIds.update { it - preview.sourceUrls }
+            deletePreview.value = null
+            _effects.emit(
+                BookSourceEffect.ShowSnackbar(
+                    application.getString(io.legado.app.R.string.book_source_delete_change_success)
+                )
+            )
         }
     }
 
@@ -510,47 +688,59 @@ class BookSourceViewModel(
                 val localBySearchHint = localSources.mapNotNull { source ->
                     normalizeSearchUrlHint(source.searchUrl)?.let { it to source }
                 }.toMap()
-                val seen = mutableSetOf<String>()
-                val wrappers = sources.map { source ->
-                        val old = localByUrl[source.bookSourceUrl]
-                        val identity = normalizeBookSourceUrl(source.bookSourceUrl)
-                        val duplicateKey = bookSourceImportDuplicateKey(source.bookSourceUrl)
-                        val internalDuplicate = !seen.add(duplicateKey)
-                        // 只有原始或规范化后的 bookSourceUrl 相同，才能认定为同一个存储书源。
-                        // 仅主机名或搜索地址相同都只是提示，不能自动替换已有书源。
-                        val conflict = when {
-                            identity == null -> BookSourceUrlConflict.Invalid
-                            old != null -> BookSourceUrlConflict.Exact
-                            identity.normalizedUrl in localNormalizedUrls -> BookSourceUrlConflict.Normalized
-                            identity.host in localHosts -> BookSourceUrlConflict.SameHost
-                            else -> BookSourceUrlConflict.None
-                        }
-                        val status = when {
-                            source.bookSourceUrl.isBlank() -> ImportStatus.MissingSourceKey
-                            isInvalidBookSourceImportPattern(source.bookSourceUrl) -> ImportStatus.InvalidUrl
-                            internalDuplicate -> ImportStatus.InternalDuplicate
-                            conflict == BookSourceUrlConflict.Normalized -> ImportStatus.NormalizedConflict
-                            conflict == BookSourceUrlConflict.SameHost -> ImportStatus.HostConflict
-                            old != null && !source.hasCoreRules() && old.hasCoreRules() -> ImportStatus.IncompleteImport
-                            old != null && source.hasCoreRules() && !old.hasCoreRules() -> ImportStatus.IncompleteLocal
-                            old == null -> ImportStatus.New
-                            old != null && identity == null -> ImportStatus.RawSourceKeyConflict
-                            source.lastUpdateTime > old.lastUpdateTime -> ImportStatus.Update
-                            else -> ImportStatus.Existing
-                        }
-                        val comparisonSource = old ?: when (conflict) {
-                            BookSourceUrlConflict.Normalized -> identity?.normalizedUrl?.let(localByNormalizedUrl::get)
-                            else -> null
-                        }
-                        val searchUrlHint = normalizeSearchUrlHint(source.searchUrl)
-                            ?.let(localBySearchHint::get)
-                            ?.takeIf { old == null }
-                        ImportItemWrapper(
+                val importEntries = sources.mapIndexed { index, source ->
+                    ImportSourceEntry(
+                        source = source,
+                        originalIndex = index,
+                        duplicateGroupKey = bookSourceImportDuplicateKey(source.bookSourceUrl),
+                        valueScore = dedupUseCase.importValueScore(source),
+                    )
+                }
+                val canonicalIndexes = importEntries.groupBy { it.duplicateGroupKey }
+                    .mapValues { (_, entries) -> entries.maxWithOrNull(compareBy<ImportSourceEntry> { it.valueScore }.thenByDescending { -it.originalIndex })?.originalIndex }
+                val duplicateGroupSizes = importEntries.groupingBy { it.duplicateGroupKey }.eachCount()
+                val wrappers = importEntries.map { entry ->
+                    val source = entry.source
+                    val old = localByUrl[source.bookSourceUrl]
+                    val identity = normalizeBookSourceUrl(source.bookSourceUrl)
+                    val internalDuplicate = canonicalIndexes[entry.duplicateGroupKey] != entry.originalIndex &&
+                        duplicateGroupSizes.getValue(entry.duplicateGroupKey) > 1
+                    // 只有原始或比较后的地址相同，才能认定为同一个存储书源。
+                    // 仅主机名或搜索地址相同都只是提示，不能自动替换已有书源。
+                    val conflict = when {
+                        identity == null -> BookSourceUrlConflict.Invalid
+                        old != null -> BookSourceUrlConflict.Exact
+                        identity.normalizedUrl in localNormalizedUrls -> BookSourceUrlConflict.Normalized
+                        identity.host in localHosts -> BookSourceUrlConflict.SameHost
+                        else -> BookSourceUrlConflict.None
+                    }
+                    val status = when {
+                        source.bookSourceUrl.isBlank() -> ImportStatus.MissingSourceKey
+                        isInvalidBookSourceImportPattern(source.bookSourceUrl) -> ImportStatus.InvalidPattern
+                        internalDuplicate -> ImportStatus.InternalDuplicate
+                        conflict == BookSourceUrlConflict.Normalized -> ImportStatus.NormalizedConflict
+                        conflict == BookSourceUrlConflict.SameHost -> ImportStatus.HostConflict
+                        old != null && !source.hasCoreRules() && old.hasCoreRules() -> ImportStatus.IncompleteImport
+                        old != null && source.hasCoreRules() && !old.hasCoreRules() -> ImportStatus.IncompleteLocal
+                        old == null -> ImportStatus.New
+                        old != null && identity == null -> ImportStatus.RawSourceKeyConflict
+                        source.lastUpdateTime > old.lastUpdateTime -> ImportStatus.Update
+                        else -> ImportStatus.Existing
+                    }
+                    val comparisonSource = old ?: when (conflict) {
+                        BookSourceUrlConflict.Normalized -> identity?.normalizedUrl?.let(localByNormalizedUrl::get)
+                        else -> null
+                    }
+                    val searchUrlHint = normalizeSearchUrlHint(source.searchUrl)
+                        ?.let(localBySearchHint::get)
+                        ?.takeIf { old == null }
+                    ImportItemWrapper(
                             data = source,
                             oldData = comparisonSource,
                             isSelected = status == ImportStatus.New ||
                                 status == ImportStatus.IncompleteLocal,
                             isSelectable = status != ImportStatus.InvalidUrl &&
+                                status != ImportStatus.InvalidPattern &&
                                 status != ImportStatus.MissingSourceKey &&
                                 status != ImportStatus.InternalDuplicate,
                             canKeepBoth = status != ImportStatus.NormalizedConflict &&
@@ -563,7 +753,8 @@ class BookSourceViewModel(
                                 ImportStatus.HostConflict -> ImportConflictReason.SameHost
                                 ImportStatus.InternalDuplicate -> ImportConflictReason.InternalDuplicate
                                 ImportStatus.RawSourceKeyConflict -> ImportConflictReason.RawSourceKey
-                                ImportStatus.InvalidUrl -> ImportConflictReason.InvalidPattern
+                                ImportStatus.InvalidUrl -> ImportConflictReason.InvalidUrl
+                                ImportStatus.InvalidPattern -> ImportConflictReason.InvalidPattern
                                 ImportStatus.MissingSourceKey -> ImportConflictReason.MissingSourceKey
                                 ImportStatus.IncompleteImport -> ImportConflictReason.IncompleteImport
                                 ImportStatus.IncompleteLocal -> ImportConflictReason.IncompleteLocal
@@ -574,7 +765,7 @@ class BookSourceViewModel(
                             host = identity?.host,
                             searchUrlHint = searchUrlHint?.bookSourceName,
                             decision = when {
-                                status == ImportStatus.InvalidUrl || status == ImportStatus.MissingSourceKey -> ImportDecision.Skip
+                                status == ImportStatus.InvalidUrl || status == ImportStatus.InvalidPattern || status == ImportStatus.MissingSourceKey -> ImportDecision.Skip
                                 status == ImportStatus.IncompleteImport -> ImportDecision.KeepLocal
                                 status == ImportStatus.IncompleteLocal -> ImportDecision.UseImport
                                 status == ImportStatus.New -> ImportDecision.UseImport
@@ -587,12 +778,20 @@ class BookSourceViewModel(
                                     hasVariablesOrCache = database.cacheDao.hasSourceData(local.bookSourceUrl),
                                 )
                             },
-                        )
-                    }
+                            duplicateGroupKey = entry.duplicateGroupKey,
+                            valueScore = entry.valueScore,
+                            originalIndex = entry.originalIndex,
+                    )
+                }
                 importState.value = BaseImportUiState.Loading(application.getString(io.legado.app.R.string.import_progress_preview))
                 BaseImportUiState.Success(
                     source = input,
-                    items = wrappers.sortedWith(compareBy { importStatusPriority(it.status) }).toImmutableList(),
+                    items = wrappers.sortedWith(
+                        compareBy<ImportItemWrapper<BookSource>> { it.duplicateGroupKey ?: "\uFFFF" }
+                            .thenByDescending { it.valueScore }
+                            .thenBy { importStatusPriority(it.status) }
+                            .thenBy { it.originalIndex }
+                    ).toImmutableList(),
                     keepOriginalName = settings.importKeepName,
                     keepOriginalGroup = settings.importKeepGroup,
                     keepOriginalEnable = settings.importKeepEnable,
@@ -700,6 +899,7 @@ private fun BookSource.hasImportPayload(): Boolean =
             val sources = state.items.filter {
                 it.isSelected &&
                     it.status != ImportStatus.InvalidUrl &&
+                    it.status != ImportStatus.InvalidPattern &&
                     it.status != ImportStatus.MissingSourceKey &&
                     it.status != ImportStatus.InternalDuplicate
             }.distinctBy { it.data.bookSourceUrl }.map { wrapper ->
@@ -740,7 +940,7 @@ private fun BookSource.hasImportPayload(): Boolean =
                 state.items.count { it.status == ImportStatus.NormalizedConflict },
                 state.items.count { it.status == ImportStatus.HostConflict },
                 state.items.count { it.status == ImportStatus.InternalDuplicate },
-                state.items.count { it.status == ImportStatus.InvalidUrl || it.status == ImportStatus.MissingSourceKey },
+                state.items.count { it.status == ImportStatus.InvalidUrl || it.status == ImportStatus.InvalidPattern || it.status == ImportStatus.MissingSourceKey },
                 state.items.count { it.status == ImportStatus.IncompleteImport || it.status == ImportStatus.IncompleteLocal },
             )
             _effects.tryEmit(BookSourceEffect.ImportFinished(summary))
@@ -798,7 +998,7 @@ private fun BookSource.hasImportPayload(): Boolean =
 }
 
 private fun importStatusPriority(status: ImportStatus): Int = when (status) {
-    ImportStatus.InvalidUrl -> 0
+    ImportStatus.InvalidUrl, ImportStatus.InvalidPattern -> 0
     ImportStatus.MissingSourceKey -> 0
     ImportStatus.NormalizedConflict -> 1
     // 文件内重复项不可导入，放在可导入项之后，避免遮住第一条有效条目。
@@ -809,6 +1009,13 @@ private fun importStatusPriority(status: ImportStatus): Int = when (status) {
     ImportStatus.Error -> 5
     ImportStatus.New -> 6
 }
+
+private data class ImportSourceEntry(
+    val source: BookSource,
+    val originalIndex: Int,
+    val duplicateGroupKey: String,
+    val valueScore: Int,
+)
 
 private fun normalizeSearchUrlHint(value: String?): String? = value
     ?.filterNot { it.isWhitespace() || it.isISOControl() }
@@ -905,7 +1112,10 @@ private fun List<BookSourcePart>.sortFor(
     }
     val comparator = when (sort) {
         BookSourceSort.Name -> compareBy<BookSourcePart> { it.bookSourceName }
-        BookSourceSort.Url -> compareBy { it.bookSourceUrl }; BookSourceSort.Weight -> compareBy { it.weight }
+        BookSourceSort.Url -> compareBy<BookSourcePart> {
+            normalizeBookSourceUrl(it.bookSourceUrl)?.normalizedUrl ?: it.bookSourceUrl
+        }.thenBy { it.bookSourceUrl }
+        BookSourceSort.Weight -> compareBy { it.weight }
         BookSourceSort.Update -> compareByDescending<BookSourcePart> { it.lastUpdateTime }; BookSourceSort.Respond -> compareBy { it.respondTime }
         BookSourceSort.Enable -> compareByDescending<BookSourcePart> { it.enabled }.thenBy { it.bookSourceName }
         BookSourceSort.Default -> compareBy { it.customOrder }

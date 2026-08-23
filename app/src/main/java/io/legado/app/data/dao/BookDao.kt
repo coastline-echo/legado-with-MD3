@@ -38,6 +38,9 @@ interface BookDao {
     @Query("SELECT count(*) FROM books WHERE origin = :origin")
     fun countByOrigin(origin: String): Int
 
+    @Query("SELECT * FROM books WHERE origin = :origin ORDER BY name COLLATE LOCALIZED, author COLLATE LOCALIZED")
+    fun getByOrigin(origin: String): List<Book>
+
     fun flowByGroup(groupId: Long): Flow<List<Book>> {
         return when (groupId) {
             BookGroup.IdRoot -> flowRoot()

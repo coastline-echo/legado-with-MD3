@@ -79,7 +79,10 @@ import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.utils.toastOnUi
+import io.legado.app.domain.usecase.BookSourceMatchType
+import io.legado.app.domain.usecase.BookSourceRecommendationReason
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.collections.immutable.ImmutableList
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -180,6 +183,7 @@ fun BookSourceScreen(
     var showExportSheet by remember { mutableStateOf(false) }
     var showImportOptions by remember { mutableStateOf(false) }
     var showCustomGroup by remember { mutableStateOf(false) }
+    var showDedupDialog by remember { mutableStateOf(false) }
     val importSuccess = state.importState as? BaseImportUiState.Success
     var dragOrder by remember { mutableStateOf<List<BookSourceItemUi>?>(null) }
     val displayedRules = dragOrder ?: rules
@@ -498,6 +502,25 @@ fun BookSourceScreen(
         onDismiss = { checkSheet = CheckSheet.Run },
     )
 
+    BookSourceDedupDialog(
+        show = showDedupDialog,
+        groups = state.dedupGroups,
+        scanning = state.dedupScanning,
+        onDismissRequest = { showDedupDialog = false },
+        onRescan = { onIntent(BookSourceIntent.ScanDuplicateSources) },
+        onEditSource = onEditSource,
+        onToggleRetained = { onIntent(BookSourceIntent.ToggleDedupRetained(it)) },
+        onIgnoreGroup = { onIntent(BookSourceIntent.IgnoreDedupGroup(it)) },
+    )
+
+    BookSourceDeletePreviewDialog(
+        preview = state.deletePreview,
+        onCancel = { onIntent(BookSourceIntent.CancelDelete) },
+        onConfirm = { onIntent(BookSourceIntent.ConfirmDirectDelete) },
+        onChangeSource = { onIntent(BookSourceIntent.ConfirmChangeSourceDelete) },
+        onSelectTarget = { onIntent(BookSourceIntent.SelectDeleteTarget(it)) },
+    )
+
     BookSourceGroupFilterSheet(
         show = showGroupFilterSheet,
         state = state,
@@ -625,7 +648,7 @@ fun BookSourceScreen(
         ),
         onDeleteSelected = { ids ->
             @Suppress("UNCHECKED_CAST")
-            onIntent(BookSourceIntent.Delete(ids as Set<String>))
+            onIntent(BookSourceIntent.PrepareDelete(ids as Set<String>))
         },
         deleteIds = deleteIds,
         onDeleteIdsChange = { deleteIds = it?.mapNotNull { id -> id as? String }?.toSet() },
@@ -650,6 +673,13 @@ fun BookSourceScreen(
             RoundDropdownMenuItem(
                 text = stringResource(R.string.import_on_line),
                 onClick = { dismiss(); showOnlineImport = true })
+            RoundDropdownMenuItem(
+                text = stringResource(R.string.book_source_duplicate_scan),
+                onClick = {
+                    dismiss()
+                    showDedupDialog = true
+                    onIntent(BookSourceIntent.ScanDuplicateSources)
+                })
             RoundDropdownMenuItem(
                 text = stringResource(R.string.group_sources_by_domain),
                 isSelected = state.groupByDomain,
@@ -878,6 +908,154 @@ private fun BookSourceImportGroupDialog(
         onConfirm = { onConfirm(group.trim(), add) },
         dismissText = stringResource(R.string.cancel),
         onDismiss = onDismissRequest,
+    )
+}
+
+@Composable
+private fun BookSourceDedupDialog(
+    show: Boolean,
+    groups: ImmutableList<BookSourceDedupGroupUi>,
+    scanning: Boolean,
+    onDismissRequest: () -> Unit,
+    onRescan: () -> Unit,
+    onEditSource: (String) -> Unit,
+    onToggleRetained: (String) -> Unit,
+    onIgnoreGroup: (String) -> Unit,
+) {
+    AppAlertDialog(
+        show = show,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.book_source_duplicate_scan),
+        content = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (scanning) {
+                    AppText(stringResource(R.string.progress_show))
+                } else if (groups.isEmpty()) {
+                    AppText(stringResource(R.string.book_source_duplicate_no_result))
+                } else {
+                    groups.forEach { group ->
+                        AppText(
+                            text = when (group.matchType) {
+                                BookSourceMatchType.NormalizedUrl -> stringResource(R.string.book_source_duplicate_normalized_url)
+                                BookSourceMatchType.SameHost -> stringResource(R.string.book_source_duplicate_same_host)
+                                BookSourceMatchType.SameSearchEntry -> stringResource(R.string.book_source_duplicate_search_entry)
+                                BookSourceMatchType.SimilarStructure -> stringResource(R.string.book_source_duplicate_similar_structure)
+                                BookSourceMatchType.SimilarName -> stringResource(R.string.book_source_duplicate_similar_name)
+                                else -> group.matchType.name
+                            },
+                            style = LegadoTheme.typography.titleSmall,
+                            color = LegadoTheme.colorScheme.primary,
+                        )
+                        group.sources.forEach { source ->
+                            AppText(
+                                text = buildString {
+                                    append(source.name.ifBlank { source.sourceUrl })
+                                    if (source.sourceUrl == group.recommendedSourceUrl) {
+                                        append(" · ")
+                                        append(stringResource(R.string.book_source_duplicate_recommended))
+                                    }
+                                    append("\n")
+                                    append(source.sourceUrl)
+                                    append("\n")
+                                    append(stringResource(
+                                        R.string.book_source_duplicate_referenced_books,
+                                        source.referencedBookCount,
+                                    ))
+                                    source.reasons.forEach { reason ->
+                                        append("\n")
+                                        append(stringResource(reason.stringRes))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            SmallPlainButton(
+                                text = stringResource(R.string.book_source_duplicate_edit),
+                                onClick = { onEditSource(source.sourceUrl) },
+                            )
+                            SmallPlainButton(
+                                text = if (source.retained) {
+                                    stringResource(R.string.book_source_duplicate_unmark_retain)
+                                } else {
+                                    stringResource(R.string.book_source_duplicate_mark_retain)
+                                },
+                                onClick = { onToggleRetained(source.sourceUrl) },
+                            )
+                        }
+                        SmallPlainButton(
+                            text = stringResource(
+                                if (group.ignored) R.string.book_source_duplicate_unignore
+                                else R.string.book_source_duplicate_ignore
+                            ),
+                            onClick = {
+                                group.sources.firstOrNull()?.sourceUrl?.let(onIgnoreGroup)
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmText = stringResource(R.string.book_source_duplicate_scan),
+        onConfirm = onRescan,
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = onDismissRequest,
+    )
+}
+
+private val BookSourceRecommendationReason.stringRes: Int
+    get() = when (this) {
+        BookSourceRecommendationReason.SearchValidated -> R.string.book_source_recommend_search_validated
+        BookSourceRecommendationReason.ExploreValidated -> R.string.book_source_recommend_explore_validated
+        BookSourceRecommendationReason.InfoValidated -> R.string.book_source_recommend_info_validated
+        BookSourceRecommendationReason.TocValidated -> R.string.book_source_recommend_toc_validated
+        BookSourceRecommendationReason.ContentValidated -> R.string.book_source_recommend_content_validated
+        BookSourceRecommendationReason.ReferencedBooks -> R.string.book_source_recommend_referenced_books
+        BookSourceRecommendationReason.RulesConfigured -> R.string.book_source_recommend_rules_configured
+        BookSourceRecommendationReason.NoValidatedAdvantage -> R.string.book_source_recommend_no_advantage
+    }
+
+@Composable
+private fun BookSourceDeletePreviewDialog(
+    preview: BookSourceDeletePreviewUi?,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    onChangeSource: () -> Unit,
+    onSelectTarget: (String) -> Unit,
+) {
+    AppAlertDialog(
+        show = preview != null,
+        onDismissRequest = onCancel,
+        title = stringResource(R.string.delete),
+        text = when {
+            preview?.loading == true -> stringResource(R.string.progress_show)
+            preview == null -> ""
+            preview.referencedBookCount > 0 -> stringResource(
+                R.string.book_source_delete_referenced_warning,
+                preview.referencedBookCount,
+                if (preview.hasCookie) stringResource(R.string.yes) else stringResource(R.string.no),
+                if (preview.hasVariablesOrCache) stringResource(R.string.yes) else stringResource(R.string.no),
+            )
+            else -> stringResource(R.string.sure_del)
+        },
+        content = if (preview?.recommendedTargetSourceUrl != null && preview.referencedBookCount > 0) {
+            {
+                preview?.targetSourceUrls.orEmpty().forEach { sourceUrl ->
+                    SmallPlainButton(
+                        text = if (sourceUrl == preview?.recommendedTargetSourceUrl) "✓ $sourceUrl" else sourceUrl,
+                        onClick = { onSelectTarget(sourceUrl) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                MediumTonalButton(
+                    text = stringResource(R.string.book_source_delete_change_then_delete),
+                    onClick = onChangeSource,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        } else null,
+        confirmText = stringResource(R.string.book_source_delete_direct),
+        onConfirm = onConfirm,
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = onCancel,
     )
 }
 

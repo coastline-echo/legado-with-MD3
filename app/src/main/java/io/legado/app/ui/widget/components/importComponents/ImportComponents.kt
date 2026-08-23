@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.google.gson.JsonElement
 import com.google.gson.JsonNull
 import com.google.gson.JsonObject
@@ -49,6 +53,7 @@ import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
@@ -134,21 +139,30 @@ fun <T> BatchImportDialog(
     onItemBlockedClick: (item: ImportItemWrapper<T>) -> Unit = {},
 ) {
     val loadingState = importState as? BaseImportUiState.Loading
-    AppModalBottomSheet(
-        show = loadingState != null,
-        onDismissRequest = onDismissRequest,
-        title = loadingState?.message ?: stringResource(R.string.loading),
-        modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.35f),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    // 处理中使用独立 Dialog，避免两种主题的底部弹窗宿主扩展成整页窗口。
+    if (loadingState != null) {
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+            ),
         ) {
-            AppCircularProgressIndicator()
-            AppText(loadingState?.message ?: stringResource(R.string.loading))
+            Surface(
+                modifier = Modifier.padding(24.dp),
+                color = LegadoTheme.colorScheme.surfaceContainer,
+                contentColor = LegadoTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(28.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    AppCircularProgressIndicator()
+                    AppText(loadingState.message)
+                }
+            }
         }
     }
 
@@ -175,7 +189,9 @@ fun <T> BatchImportDialog(
     val listState = rememberLazyListState()
     LaunchedEffect(currentState.source) { listState.scrollToItem(0) }
     var editingIndex by remember(currentState.source) { mutableStateOf<Int?>(null) }
+    var infoIndex by remember(currentState.source) { mutableStateOf<Int?>(null) }
     val editingItem = editingIndex?.let { currentState.items.getOrNull(it) }
+    val infoItem = infoIndex?.let { currentState.items.getOrNull(it) }
     val isEditing = editingItem != null
     val selectedCount = currentState.items.count { it.isSelected }
     val totalCount = currentState.items.size
@@ -265,7 +281,7 @@ fun <T> BatchImportDialog(
                 ) {
                     itemsIndexed(
                         currentState.items,
-                        key = { _, item -> item.data.hashCode() }
+                        key = { index, item -> item.originalIndex to index }
                     ) { index, itemWrapper ->
                         val canSelect = itemCanSelect(itemWrapper)
                         ImportItemRow(
@@ -278,7 +294,7 @@ fun <T> BatchImportDialog(
                             },
                             onInfoClick = {
                                 onItemInfoClick(index)
-                                editingIndex = index
+                                infoIndex = index
                             },
                             decision = itemWrapper.decision,
                             decisionLabel = itemDecisionLabel(itemWrapper.decision),
@@ -300,6 +316,20 @@ fun <T> BatchImportDialog(
                 .height(8.dp)
         )
     }
+
+    AppAlertDialog(
+        show = infoItem != null,
+        onDismissRequest = { infoIndex = null },
+        title = infoItem?.let { itemTitle(it.data) },
+        text = infoItem?.let { itemConflictSubtitle(it) },
+        confirmText = stringResource(R.string.edit),
+        onConfirm = {
+            editingIndex = infoIndex
+            infoIndex = null
+        },
+        dismissText = stringResource(android.R.string.cancel),
+        onDismiss = { infoIndex = null },
+    )
 }
 
 @SuppressLint("ConfigurationScreenWidthHeight")
@@ -411,6 +441,7 @@ fun ImportItemRow(
                     ImportStatus.HostConflict -> stringResource(R.string.import_status_host_conflict)
                     ImportStatus.InternalDuplicate -> stringResource(R.string.import_status_internal_duplicate)
                     ImportStatus.InvalidUrl -> stringResource(R.string.import_status_invalid_url)
+                    ImportStatus.InvalidPattern -> stringResource(R.string.import_status_invalid_pattern)
                     ImportStatus.MissingSourceKey -> stringResource(R.string.import_status_missing_source_key)
                     ImportStatus.IncompleteImport -> stringResource(R.string.import_status_incomplete_import)
                     ImportStatus.IncompleteLocal -> stringResource(R.string.import_status_incomplete_local)
@@ -421,9 +452,12 @@ fun ImportItemRow(
                     ImportStatus.New -> LegadoTheme.colorScheme.primary
                     ImportStatus.Update -> LegadoTheme.colorScheme.secondary
                     ImportStatus.Error -> LegadoTheme.colorScheme.error
-                    ImportStatus.NormalizedConflict, ImportStatus.InternalDuplicate, ImportStatus.InvalidUrl, ImportStatus.MissingSourceKey -> LegadoTheme.colorScheme.error
-                    ImportStatus.HostConflict -> LegadoTheme.colorScheme.secondary
-                    ImportStatus.IncompleteImport, ImportStatus.IncompleteLocal -> LegadoTheme.colorScheme.error
+                    ImportStatus.NormalizedConflict,
+                    ImportStatus.HostConflict,
+                    ImportStatus.InternalDuplicate,
+                    ImportStatus.IncompleteImport,
+                    ImportStatus.IncompleteLocal -> LegadoTheme.colorScheme.secondary
+                    ImportStatus.InvalidUrl, ImportStatus.InvalidPattern, ImportStatus.MissingSourceKey -> LegadoTheme.colorScheme.error
                     else -> LegadoTheme.colorScheme.outline
                 },
                 modifier = Modifier.padding(end = 4.dp)
@@ -443,6 +477,7 @@ fun ImportItemRow(
                     text = decisionLabel,
                     enabled = onDecisionClick != null &&
                         status != ImportStatus.InvalidUrl &&
+                        status != ImportStatus.InvalidPattern &&
                         status != ImportStatus.MissingSourceKey &&
                         status != ImportStatus.InternalDuplicate,
                     contentDescription = decisionLabel,

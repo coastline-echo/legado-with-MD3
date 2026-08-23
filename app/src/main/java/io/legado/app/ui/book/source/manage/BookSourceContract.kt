@@ -4,6 +4,9 @@ import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import io.legado.app.data.entities.BookSource
+import io.legado.app.domain.usecase.BookSourceMatchType
+import io.legado.app.domain.usecase.BookSourceRecommendationReason
+import io.legado.app.domain.usecase.BookSourceRuleProfile
 import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.importComponents.ImportStatus
 import io.legado.app.ui.widget.components.importComponents.ImportDecision
@@ -40,6 +43,38 @@ data class BookSourceCheckOptionsUi(
     val checkContent: Boolean = true,
 )
 
+@Immutable
+data class BookSourceDedupSourceUi(
+    val sourceUrl: String,
+    val name: String,
+    val referencedBookCount: Int,
+    val score: Int,
+    val reasons: ImmutableList<BookSourceRecommendationReason>,
+    val hasCookie: Boolean,
+    val hasVariablesOrCache: Boolean,
+    val rules: BookSourceRuleProfile,
+    val retained: Boolean = false,
+)
+
+@Immutable
+data class BookSourceDedupGroupUi(
+    val matchType: BookSourceMatchType,
+    val sources: ImmutableList<BookSourceDedupSourceUi>,
+    val recommendedSourceUrl: String,
+    val ignored: Boolean = false,
+)
+
+@Immutable
+data class BookSourceDeletePreviewUi(
+    val sourceUrls: ImmutableSet<String> = persistentSetOf(),
+    val referencedBookCount: Int = 0,
+    val hasCookie: Boolean = false,
+    val hasVariablesOrCache: Boolean = false,
+    val recommendedTargetSourceUrl: String? = null,
+    val targetSourceUrls: ImmutableList<String> = persistentListOf(),
+    val loading: Boolean = false,
+)
+
 @Stable
 data class BookSourceUiState(
     override val items: ImmutableList<BookSourceItemUi> = persistentListOf(),
@@ -56,6 +91,9 @@ data class BookSourceUiState(
     val checkOptions: BookSourceCheckOptionsUi = BookSourceCheckOptionsUi(),
     // 导入过程由独立的批量弹窗展示，不能让书源列表进入页面级 loading。
     val interaction: InteractionState = InteractionState(),
+    val dedupGroups: ImmutableList<BookSourceDedupGroupUi> = persistentListOf(),
+    val dedupScanning: Boolean = false,
+    val deletePreview: BookSourceDeletePreviewUi? = null,
 ) : ListUiState<BookSourceItemUi> {
     override val isSearch get() = interaction.isSearchMode
     override val isLoading get() = interaction.isLoading
@@ -74,6 +112,11 @@ sealed interface BookSourceIntent {
     data class SetEnabledForSelection(val ids: Set<String>, val enabled: Boolean) : BookSourceIntent
     data class SetExploreEnabled(val ids: Set<String>, val enabled: Boolean) : BookSourceIntent
     data class Delete(val ids: Set<String>) : BookSourceIntent
+    data class PrepareDelete(val ids: Set<String>) : BookSourceIntent
+    data object CancelDelete : BookSourceIntent
+    data object ConfirmDirectDelete : BookSourceIntent
+    data object ConfirmChangeSourceDelete : BookSourceIntent
+    data class SelectDeleteTarget(val sourceUrl: String) : BookSourceIntent
     data class MoveToEdge(val ids: Set<String>, val toTop: Boolean) : BookSourceIntent
     data class MoveItem(val from: Int, val to: Int) : BookSourceIntent
     data object SaveSortOrder : BookSourceIntent
@@ -110,6 +153,9 @@ sealed interface BookSourceIntent {
     data class SetImportCustomGroup(val group: String?, val add: Boolean) : BookSourceIntent
     data object CancelImport : BookSourceIntent
     data object SaveImportedSources : BookSourceIntent
+    data object ScanDuplicateSources : BookSourceIntent
+    data class ToggleDedupRetained(val sourceUrl: String) : BookSourceIntent
+    data class IgnoreDedupGroup(val sourceUrl: String) : BookSourceIntent
 }
 
 sealed interface BookSourceEffect {

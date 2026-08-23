@@ -20,6 +20,11 @@ data class ImportItemWrapper<T>(
     val searchUrlHint: String? = null,
     val decision: ImportDecision? = null,
     val localMetadata: ImportLocalMetadata? = null,
+    /** 导入文件内用于连续展示的书源身份。 */
+    val duplicateGroupKey: String? = null,
+    /** 仅用于同组排序，不代表验证结果。 */
+    val valueScore: Int = 0,
+    val originalIndex: Int = 0,
 )
 
 @Immutable
@@ -59,6 +64,7 @@ enum class ImportStatus {
     HostConflict,
     InternalDuplicate,
     InvalidUrl,
+    InvalidPattern,
     MissingSourceKey,
     IncompleteImport,
     IncompleteLocal,
