@@ -248,14 +248,12 @@ class BookSourceViewModel(
         val ignored: Set<String>,
     )
 
-    val uiState = combine(
+    private val baseUiState = combine(
         listState,
         importState,
         checkGateway.state,
         checkSettingsGateway.settings,
-        dedupState,
-        deletePreview,
-    ) { state, importing, check, settings, dedup, deleting ->
+    ) { state, importing, check, settings ->
         state.copy(
             items = state.items.map { item ->
                 item.copy(
@@ -278,6 +276,11 @@ class BookSourceViewModel(
                 checkCategory = settings.checkCategory,
                 checkContent = settings.checkContent,
             ),
+        )
+    }
+
+    val uiState = combine(baseUiState, dedupState, deletePreview) { state, dedup, deleting ->
+        state.copy(
             dedupGroups = dedup.groups.map { group ->
                 group.copy(
                     ignored = group.sources.any { it.sourceUrl in dedup.ignored },
@@ -451,7 +454,7 @@ class BookSourceViewModel(
 
     private fun scanDuplicateSources() {
         if (dedupScanning.value) return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             dedupScanning.value = true
             runCatching { dedupUseCase.scan(checkGateway.state.value) }
                 .onSuccess { groups ->

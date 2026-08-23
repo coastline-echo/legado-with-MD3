@@ -160,7 +160,7 @@ fun <T> BatchImportDialog(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     AppCircularProgressIndicator()
-                    AppText(loadingState.message)
+                    AppText(loadingState.message ?: "")
                 }
             }
         }

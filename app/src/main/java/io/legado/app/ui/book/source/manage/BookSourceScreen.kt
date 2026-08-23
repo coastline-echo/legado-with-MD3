@@ -933,63 +933,70 @@ private fun BookSourceDedupDialog(
                 } else if (groups.isEmpty()) {
                     AppText(stringResource(R.string.book_source_duplicate_no_result))
                 } else {
-                    groups.forEach { group ->
-                        AppText(
-                            text = when (group.matchType) {
-                                BookSourceMatchType.NormalizedUrl -> stringResource(R.string.book_source_duplicate_normalized_url)
-                                BookSourceMatchType.SameHost -> stringResource(R.string.book_source_duplicate_same_host)
-                                BookSourceMatchType.SameSearchEntry -> stringResource(R.string.book_source_duplicate_search_entry)
-                                BookSourceMatchType.SimilarStructure -> stringResource(R.string.book_source_duplicate_similar_structure)
-                                BookSourceMatchType.SimilarName -> stringResource(R.string.book_source_duplicate_similar_name)
-                                else -> group.matchType.name
-                            },
-                            style = LegadoTheme.typography.titleSmall,
-                            color = LegadoTheme.colorScheme.primary,
-                        )
-                        group.sources.forEach { source ->
-                            AppText(
-                                text = buildString {
-                                    append(source.name.ifBlank { source.sourceUrl })
-                                    if (source.sourceUrl == group.recommendedSourceUrl) {
-                                        append(" · ")
-                                        append(stringResource(R.string.book_source_duplicate_recommended))
-                                    }
-                                    append("\n")
-                                    append(source.sourceUrl)
-                                    append("\n")
-                                    append(stringResource(
-                                        R.string.book_source_duplicate_referenced_books,
-                                        source.referencedBookCount,
-                                    ))
-                                    source.reasons.forEach { reason ->
-                                        append("\n")
-                                        append(stringResource(reason.stringRes))
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            SmallPlainButton(
-                                text = stringResource(R.string.book_source_duplicate_edit),
-                                onClick = { onEditSource(source.sourceUrl) },
-                            )
-                            SmallPlainButton(
-                                text = if (source.retained) {
-                                    stringResource(R.string.book_source_duplicate_unmark_retain)
-                                } else {
-                                    stringResource(R.string.book_source_duplicate_mark_retain)
-                                },
-                                onClick = { onToggleRetained(source.sourceUrl) },
-                            )
+                    FastScrollLazyColumn(
+                        modifier = Modifier.heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        groups.forEach { group ->
+                            item(key = "${group.matchType.name}:${group.sources.joinToString("|") { it.sourceUrl }}") {
+                                AppText(
+                                    text = when (group.matchType) {
+                                        BookSourceMatchType.NormalizedUrl -> stringResource(R.string.book_source_duplicate_normalized_url)
+                                        BookSourceMatchType.SameHost -> stringResource(R.string.book_source_duplicate_same_host)
+                                        BookSourceMatchType.SameSearchEntry -> stringResource(R.string.book_source_duplicate_search_entry)
+                                        BookSourceMatchType.SimilarStructure -> stringResource(R.string.book_source_duplicate_similar_structure)
+                                        BookSourceMatchType.SimilarName -> stringResource(R.string.book_source_duplicate_similar_name)
+                                        else -> group.matchType.name
+                                    },
+                                    style = LegadoTheme.typography.titleSmall,
+                                    color = LegadoTheme.colorScheme.primary,
+                                )
+                                group.sources.forEach { source ->
+                                    AppText(
+                                        text = buildString {
+                                            append(source.name.ifBlank { source.sourceUrl })
+                                            if (source.sourceUrl == group.recommendedSourceUrl) {
+                                                append(" · ")
+                                                append(stringResource(R.string.book_source_duplicate_recommended))
+                                            }
+                                            append("\n")
+                                            append(source.sourceUrl)
+                                            append("\n")
+                                            append(stringResource(
+                                                R.string.book_source_duplicate_referenced_books,
+                                                source.referencedBookCount,
+                                            ))
+                                            source.reasons.forEach { reason ->
+                                                append("\n")
+                                                append(stringResource(reason.stringRes))
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    SmallPlainButton(
+                                        text = stringResource(R.string.book_source_duplicate_edit),
+                                        onClick = { onEditSource(source.sourceUrl) },
+                                    )
+                                    SmallPlainButton(
+                                        text = if (source.retained) {
+                                            stringResource(R.string.book_source_duplicate_unmark_retain)
+                                        } else {
+                                            stringResource(R.string.book_source_duplicate_mark_retain)
+                                        },
+                                        onClick = { onToggleRetained(source.sourceUrl) },
+                                    )
+                                }
+                                SmallPlainButton(
+                                    text = stringResource(
+                                        if (group.ignored) R.string.book_source_duplicate_unignore
+                                        else R.string.book_source_duplicate_ignore
+                                    ),
+                                    onClick = {
+                                        group.sources.firstOrNull()?.sourceUrl?.let(onIgnoreGroup)
+                                    },
+                                )
+                            }
                         }
-                        SmallPlainButton(
-                            text = stringResource(
-                                if (group.ignored) R.string.book_source_duplicate_unignore
-                                else R.string.book_source_duplicate_ignore
-                            ),
-                            onClick = {
-                                group.sources.firstOrNull()?.sourceUrl?.let(onIgnoreGroup)
-                            },
-                        )
                     }
                 }
             }
