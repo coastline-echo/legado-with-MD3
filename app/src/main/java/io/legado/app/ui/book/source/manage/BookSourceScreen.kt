@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
+import io.legado.app.data.entities.BookSource
 import io.legado.app.service.BookSourceCheckService
 import io.legado.app.ui.qrcode.QrCodeResult
 import io.legado.app.ui.theme.LegadoTheme
@@ -69,6 +70,7 @@ import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.importComponents.BatchImportDialog
 import io.legado.app.ui.widget.components.importComponents.ImportStatus
 import io.legado.app.ui.widget.components.importComponents.ImportDecision
+import io.legado.app.ui.widget.components.importComponents.ImportItemWrapper
 import io.legado.app.ui.widget.components.importComponents.SourceInputDialog
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
@@ -343,138 +345,58 @@ fun BookSourceScreen(
         itemTitle = { it.bookSourceName },
         itemSubtitle = { it.bookSourceUrl },
         itemConflictSubtitle = { item ->
+            val conflictDetails = appendBookSourceImportConflictDetails(item)
             buildString {
-                append(item.data.bookSourceName.ifBlank { item.data.bookSourceUrl })
-                val conflictReason = item.conflictReason
-                if (conflictReason != null) {
-                    val reason = when (conflictReason) {
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.NormalizedUrl ->
-                            stringResource(R.string.import_conflict_normalized_url)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.SameHost ->
-                            stringResource(R.string.import_conflict_same_host)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InternalDuplicate ->
-                            stringResource(R.string.import_conflict_internal_duplicate)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.RawSourceKey ->
-                            stringResource(R.string.import_conflict_raw_source_key)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.ExistingUrl ->
-                            stringResource(R.string.import_conflict_existing_url)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidUrl ->
-                            stringResource(R.string.import_status_invalid_url)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.MissingSourceKey ->
-                            stringResource(R.string.import_status_missing_source_key)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidPattern ->
-                            stringResource(R.string.import_status_invalid_pattern)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteImport ->
-                            stringResource(R.string.import_status_incomplete_import)
-                        io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteLocal ->
-                            stringResource(R.string.import_status_incomplete_local)
-                    }
-                    append("\n").append(reason)
-                }
-                if (item.normalizedUrl != null) {
-                    append("\n").append(stringResource(R.string.import_detail_normalized, item.normalizedUrl))
-                }
-                if (item.host != null) {
-                    append("\n").append(stringResource(R.string.import_detail_host, item.host))
-                }
-                if (item.searchUrlHint != null) {
-                    append("\n").append(stringResource(R.string.import_detail_search_url_hint, item.searchUrlHint))
-                }
-                val local = item.oldData as? io.legado.app.data.entities.BookSource
-                if (local != null) {
-                    append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
-                    val imported = item.data
-                    val changed = mutableListOf<String>()
-                    if (imported.bookSourceName != local.bookSourceName) changed += stringResource(R.string.import_diff_name)
-                    if (imported.bookSourceGroup != local.bookSourceGroup) changed += stringResource(R.string.import_diff_group)
-                    if (imported.bookSourceType != local.bookSourceType) changed += stringResource(R.string.import_diff_type)
-                    if (imported.lastUpdateTime != local.lastUpdateTime) changed += stringResource(R.string.import_diff_update_time)
-                    if ((imported.ruleSearch != null) != (local.ruleSearch != null)) changed += stringResource(R.string.import_diff_search_rule)
-                    if ((imported.ruleExplore != null) != (local.ruleExplore != null)) changed += stringResource(R.string.import_diff_explore_rule)
-                    if ((imported.ruleBookInfo != null) != (local.ruleBookInfo != null)) changed += stringResource(R.string.import_diff_info_rule)
-                    if ((imported.ruleToc != null) != (local.ruleToc != null)) changed += stringResource(R.string.import_diff_toc_rule)
-                    if ((imported.ruleContent != null) != (local.ruleContent != null)) changed += stringResource(R.string.import_diff_content_rule)
-                    if (changed.isNotEmpty()) {
-                        append("\n").append(stringResource(R.string.import_detail_differences, changed.joinToString("、")))
-                    }
-                    val incompleteSource = when (item.status) {
-                        ImportStatus.IncompleteImport -> imported
-                        ImportStatus.IncompleteLocal -> local
-                        else -> null
-                    }
-                    val ruleIds = incompleteSource?.missingRuleResIds().orEmpty()
-                    if (ruleIds.isNotEmpty()) {
-                        val missingRules = mutableListOf<String>()
-                        for (ruleId in ruleIds) missingRules += stringResource(ruleId)
-                        append("\n").append(
-                            stringResource(
-                                R.string.import_missing_rules,
-                                missingRules.joinToString("、"),
-                            )
-                        )
-                    }
-                    val metadata = item.localMetadata
-                    if (metadata != null) {
-                        append("\n").append(
-                            stringResource(
-                                R.string.import_detail_local_usage,
-                                metadata.bookReferenceCount,
-                                if (metadata.hasCookie) stringResource(R.string.yes) else stringResource(R.string.no),
-                                if (metadata.hasVariablesOrCache) stringResource(R.string.yes) else stringResource(R.string.no),
-                            )
-                        )
-                    }
-                }
+                append(item.data.bookSourceUrl)
+                append(conflictDetails)
             }
         },
         itemDetailText = { item ->
             val source = item.data
-            buildString {
-                appendLine(stringResource(R.string.import_detail_name, source.bookSourceName.ifBlank { "-" }))
-                appendLine(stringResource(R.string.import_detail_address, source.bookSourceUrl))
-                appendLine(stringResource(R.string.import_detail_status,
-                    stringResource(
-                        when (item.status) {
-                            ImportStatus.New -> R.string.import_status_new
-                            ImportStatus.Update -> R.string.import_status_update
-                            ImportStatus.Existing -> R.string.import_status_existing
-                            ImportStatus.RawSourceKeyConflict -> R.string.import_status_raw_source_key_conflict
-                            ImportStatus.NormalizedConflict -> R.string.import_status_normalized_conflict
-                            ImportStatus.HostConflict -> R.string.import_status_host_conflict
-                            ImportStatus.InternalDuplicate -> R.string.import_status_internal_duplicate
-                            ImportStatus.InvalidUrl -> R.string.import_status_invalid_url
-                            ImportStatus.InvalidPattern -> R.string.import_status_invalid_pattern
-                            ImportStatus.MissingSourceKey -> R.string.import_status_missing_source_key
-                            ImportStatus.IncompleteImport -> R.string.import_status_incomplete_import
-                            ImportStatus.IncompleteLocal -> R.string.import_status_incomplete_local
-                            ImportStatus.Error -> R.string.import_status_error
-                        }
-                    )
-                    )
+            val conflictDetails = appendBookSourceImportConflictDetails(item)
+            val detailText = StringBuilder()
+            detailText.appendLine(stringResource(R.string.import_detail_name, source.bookSourceName.ifBlank { "-" }))
+            detailText.appendLine(stringResource(R.string.import_detail_address, source.bookSourceUrl))
+            detailText.appendLine(stringResource(R.string.import_detail_score, item.valueScore))
+            detailText.appendLine(stringResource(R.string.import_detail_status,
+                stringResource(
+                    when (item.status) {
+                        ImportStatus.New -> R.string.import_status_new
+                        ImportStatus.Update -> R.string.import_status_update
+                        ImportStatus.Existing -> R.string.import_status_existing
+                        ImportStatus.RawSourceKeyConflict -> R.string.import_status_raw_source_key_conflict
+                        ImportStatus.NormalizedConflict -> R.string.import_status_normalized_conflict
+                        ImportStatus.HostConflict -> R.string.import_status_host_conflict
+                        ImportStatus.InternalDuplicate -> R.string.import_status_internal_duplicate
+                        ImportStatus.InvalidUrl -> R.string.import_status_invalid_url
+                        ImportStatus.InvalidPattern -> R.string.import_status_invalid_pattern
+                        ImportStatus.MissingSourceKey -> R.string.import_status_missing_source_key
+                        ImportStatus.IncompleteImport -> R.string.import_status_incomplete_import
+                        ImportStatus.IncompleteLocal -> R.string.import_status_incomplete_local
+                        ImportStatus.Error -> R.string.import_status_error
+                    }
                 )
-                val sourceType = when (source.bookSourceType) {
-                    1 -> stringResource(R.string.import_source_type_audio)
-                    2 -> stringResource(R.string.import_source_type_image)
-                    3 -> stringResource(R.string.import_source_type_file)
-                    else -> stringResource(R.string.import_source_type_text)
-                }
-                appendLine(stringResource(R.string.import_detail_type_group, sourceType, source.bookSourceGroup ?: "-"))
-                val configured = stringResource(R.string.import_rule_configured_unverified)
-                val notConfigured = stringResource(R.string.import_rule_not_configured)
-                val rules = listOf(
-                    "${stringResource(R.string.source_tab_search)}：${if (source.ruleSearch != null) configured else notConfigured}",
-                    "${stringResource(R.string.source_tab_find)}：${if (source.ruleExplore != null) configured else notConfigured}",
-                    "${stringResource(R.string.source_tab_info)}：${if (source.ruleBookInfo != null) configured else notConfigured}",
-                    "${stringResource(R.string.source_tab_toc)}：${if (source.ruleToc != null) configured else notConfigured}",
-                    "${stringResource(R.string.source_tab_content)}：${if (source.ruleContent != null) configured else notConfigured}",
-                    "${stringResource(R.string.login)}：${if (!source.loginUrl.isNullOrBlank()) configured else notConfigured}",
-                ).joinToString("；")
-                appendLine(stringResource(R.string.import_detail_rules, rules))
-                itemConflictSubtitle(item)?.let {
-                    val extra = it.substringAfter('\n', "")
-                    if (extra.isNotEmpty()) appendLine(extra)
-                }
+            ))
+            val sourceType = when (source.bookSourceType) {
+                1 -> stringResource(R.string.import_source_type_audio)
+                2 -> stringResource(R.string.import_source_type_image)
+                3 -> stringResource(R.string.import_source_type_file)
+                else -> stringResource(R.string.import_source_type_text)
             }
+            detailText.appendLine(stringResource(R.string.import_detail_type_group, sourceType, source.bookSourceGroup ?: "-"))
+            val configured = stringResource(R.string.import_rule_configured_unverified)
+            val notConfigured = stringResource(R.string.import_rule_not_configured)
+            val rules = listOf(
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.source_tab_search), if (source.ruleSearch != null) configured else notConfigured),
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.source_tab_find), if (source.ruleExplore != null) configured else notConfigured),
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.source_tab_info), if (source.ruleBookInfo != null) configured else notConfigured),
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.source_tab_toc), if (source.ruleToc != null) configured else notConfigured),
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.source_tab_content), if (source.ruleContent != null) configured else notConfigured),
+                stringResource(R.string.import_detail_rule_item, stringResource(R.string.login), if (!source.loginUrl.isNullOrBlank()) configured else notConfigured),
+            ).joinToString(stringResource(R.string.import_detail_list_separator))
+            detailText.appendLine(stringResource(R.string.import_detail_rules, rules))
+            detailText.append(conflictDetails)
+            detailText.toString()
         },
         onSetItemDecision = { index, decision ->
             onIntent(BookSourceIntent.SetImportDecision(index, decision))
@@ -928,7 +850,102 @@ fun BookSourceScreen(
     }
 }
 
-private fun io.legado.app.data.entities.BookSource.missingRuleResIds(): List<Int> = buildList {
+@Composable
+private fun appendBookSourceImportConflictDetails(
+    item: ImportItemWrapper<BookSource>,
+): String {
+    val details = StringBuilder()
+    val conflictReason = item.conflictReason
+    if (conflictReason != null) {
+        val reason = when (conflictReason) {
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.NormalizedUrl ->
+                stringResource(R.string.import_conflict_normalized_url)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.SameHost ->
+                stringResource(R.string.import_conflict_same_host)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InternalDuplicate ->
+                stringResource(R.string.import_conflict_internal_duplicate)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.RawSourceKey ->
+                stringResource(R.string.import_conflict_raw_source_key)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.ExistingUrl ->
+                stringResource(R.string.import_conflict_existing_url)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidUrl ->
+                stringResource(R.string.import_status_invalid_url)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.MissingSourceKey ->
+                stringResource(R.string.import_status_missing_source_key)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.InvalidPattern ->
+                stringResource(R.string.import_status_invalid_pattern)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteImport ->
+                stringResource(R.string.import_status_incomplete_import)
+            io.legado.app.ui.widget.components.importComponents.ImportConflictReason.IncompleteLocal ->
+                stringResource(R.string.import_status_incomplete_local)
+        }
+        details.append("\n").append(reason)
+    }
+    val normalizedUrl = item.normalizedUrl
+    if (normalizedUrl != null) {
+        details.append("\n").append(stringResource(R.string.import_detail_normalized, normalizedUrl))
+    }
+    val host = item.host
+    if (host != null) {
+        details.append("\n").append(stringResource(R.string.import_detail_host, host))
+    }
+    val searchUrlHint = item.searchUrlHint
+    if (searchUrlHint != null) {
+        details.append("\n").append(stringResource(R.string.import_detail_search_url_hint, searchUrlHint))
+    }
+    val local = item.oldData as? BookSource ?: return details.toString()
+    details.append("\n").append(stringResource(R.string.import_detail_local_source, local.bookSourceName))
+    val imported = item.data
+    val changed = mutableListOf<String>()
+    if (imported.bookSourceName != local.bookSourceName) changed += stringResource(R.string.import_diff_name)
+    if (imported.bookSourceGroup != local.bookSourceGroup) changed += stringResource(R.string.import_diff_group)
+    if (imported.bookSourceType != local.bookSourceType) changed += stringResource(R.string.import_diff_type)
+    if (imported.lastUpdateTime != local.lastUpdateTime) changed += stringResource(R.string.import_diff_update_time)
+    if ((imported.ruleSearch != null) != (local.ruleSearch != null)) changed += stringResource(R.string.import_diff_search_rule)
+    if ((imported.ruleExplore != null) != (local.ruleExplore != null)) changed += stringResource(R.string.import_diff_explore_rule)
+    if ((imported.ruleBookInfo != null) != (local.ruleBookInfo != null)) changed += stringResource(R.string.import_diff_info_rule)
+    if ((imported.ruleToc != null) != (local.ruleToc != null)) changed += stringResource(R.string.import_diff_toc_rule)
+    if ((imported.ruleContent != null) != (local.ruleContent != null)) changed += stringResource(R.string.import_diff_content_rule)
+    if (changed.isNotEmpty()) {
+        details.append("\n").append(
+            stringResource(
+                R.string.import_detail_differences,
+                changed.joinToString(stringResource(R.string.import_detail_list_separator)),
+            )
+        )
+    }
+    val incompleteSource = when (item.status) {
+        ImportStatus.IncompleteImport -> imported
+        ImportStatus.IncompleteLocal -> local
+        else -> null
+    }
+    val missingRules = mutableListOf<String>()
+    for (ruleId in incompleteSource?.missingRuleResIds().orEmpty()) {
+        missingRules += stringResource(ruleId)
+    }
+    if (missingRules.isNotEmpty()) {
+        details.append("\n").append(
+            stringResource(
+                R.string.import_missing_rules,
+                missingRules.joinToString(stringResource(R.string.import_detail_list_separator)),
+            )
+        )
+    }
+    val metadata = item.localMetadata
+    if (metadata != null) {
+        details.append("\n").append(
+            stringResource(
+                R.string.import_detail_local_usage,
+                metadata.bookReferenceCount,
+                if (metadata.hasCookie) stringResource(R.string.yes) else stringResource(R.string.no),
+                if (metadata.hasVariablesOrCache) stringResource(R.string.yes) else stringResource(R.string.no),
+            )
+        )
+    }
+    return details.toString()
+}
+
+private fun BookSource.missingRuleResIds(): List<Int> = buildList {
     if (ruleSearch == null) add(R.string.source_tab_search)
     if (ruleExplore == null) add(R.string.source_tab_find)
     if (ruleBookInfo == null) add(R.string.source_tab_info)

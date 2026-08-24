@@ -1056,7 +1056,7 @@ private fun normalizeImportDisplayName(value: String): String? = value
 private fun normalizeSearchUrlHint(value: String?): String? = value
     ?.filterNot { it.isWhitespace() || it.isISOControl() }
     ?.trim()
-    ?.lowercase()
+    ?.lowercase(Locale.ROOT)
     ?.takeIf { it.isNotEmpty() }
 
 private fun BookSource.hasCoreRules(): Boolean = listOf(

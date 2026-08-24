@@ -3254,12 +3254,15 @@
     <string name="import_detail_name">名称：%1$s</string>
     <string name="import_detail_status">状态：%1$s</string>
     <string name="import_detail_address">地址：%1$s</string>
+    <string name="import_detail_score">比较分数：%1$d</string>
     <string name="import_detail_type_group">类型：%1$s；分组：%2$s</string>
     <string name="import_source_type_text">文本</string>
     <string name="import_source_type_audio">音频</string>
     <string name="import_source_type_image">图片</string>
     <string name="import_source_type_file">文件</string>
     <string name="import_detail_rules">规则：%1$s</string>
+    <string name="import_detail_rule_item">%1$s：%2$s</string>
+    <string name="import_detail_list_separator">、</string>
     <string name="import_rule_configured_unverified">已配置未验证</string>
     <string name="import_rule_not_configured">未配置</string>
     <string name="import_progress_reading">正在读取导入内容…</string>

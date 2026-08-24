@@ -2500,12 +2500,15 @@
     <string name="import_detail_name">Name: %1$s</string>
     <string name="import_detail_status">Status: %1$s</string>
     <string name="import_detail_address">Address: %1$s</string>
+    <string name="import_detail_score">Comparison score: %1$d</string>
     <string name="import_detail_type_group">Type: %1$s; group: %2$s</string>
     <string name="import_source_type_text">Text</string>
     <string name="import_source_type_audio">Audio</string>
     <string name="import_source_type_image">Image</string>
     <string name="import_source_type_file">File</string>
     <string name="import_detail_rules">Rules: %1$s</string>
+    <string name="import_detail_rule_item">%1$s: %2$s</string>
+    <string name="import_detail_list_separator">, </string>
     <string name="import_rule_configured_unverified">Configured, not verified</string>
     <string name="import_rule_not_configured">Not configured</string>
     <string name="import_progress_reading">Reading import content…</string>

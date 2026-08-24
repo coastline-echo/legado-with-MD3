@@ -2888,12 +2888,15 @@
     <string name="import_detail_name">名稱：%1$s</string>
     <string name="import_detail_status">狀態：%1$s</string>
     <string name="import_detail_address">地址：%1$s</string>
+    <string name="import_detail_score">比較分數：%1$d</string>
     <string name="import_detail_type_group">類型：%1$s；分組：%2$s</string>
     <string name="import_source_type_text">文字</string>
     <string name="import_source_type_audio">音訊</string>
     <string name="import_source_type_image">圖片</string>
     <string name="import_source_type_file">檔案</string>
     <string name="import_detail_rules">規則：%1$s</string>
+    <string name="import_detail_rule_item">%1$s：%2$s</string>
+    <string name="import_detail_list_separator">、</string>
     <string name="import_rule_configured_unverified">已配置未驗證</string>
     <string name="import_rule_not_configured">未配置</string>
     <string name="import_progress_reading">正在讀取導入內容…</string>
