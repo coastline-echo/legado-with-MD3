@@ -207,6 +207,7 @@ fun BookSourceScreen(
         }
     }
     val cancelLabel = stringResource(R.string.cancel)
+    val importLoadingFallback = stringResource(R.string.loading)
     LaunchedEffect(state.checkProgress) {
         val progress = state.checkProgress ?: return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(
@@ -217,6 +218,16 @@ fun BookSourceScreen(
         )
         if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
             onIntent(BookSourceIntent.CancelCheck)
+        }
+    }
+    LaunchedEffect(state.importState) {
+        val loading = state.importState as? BaseImportUiState.Loading
+        snackbarHostState.currentSnackbarData?.dismiss()
+        if (loading != null) {
+            snackbarHostState.showSnackbar(
+                message = loading.message ?: importLoadingFallback,
+                duration = androidx.compose.material3.SnackbarDuration.Indefinite,
+            )
         }
     }
     val importDocument =
@@ -429,6 +440,7 @@ fun BookSourceScreen(
         },
         itemCanKeepBoth = { it.canKeepBoth },
         itemCanSelect = { it.isSelectable },
+        showLoadingState = false,
         onItemBlockedClick = { item ->
             if (item.status == ImportStatus.InternalDuplicate) {
                 context.toastOnUi(context.getString(R.string.import_status_internal_duplicate))

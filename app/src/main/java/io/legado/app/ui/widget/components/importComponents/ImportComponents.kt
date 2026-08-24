@@ -53,6 +53,7 @@ import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
+import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.GSON
@@ -131,23 +132,26 @@ fun <T> BatchImportDialog(
     itemCanKeepBoth: (item: ImportItemWrapper<T>) -> Boolean = { true },
     itemCanSelect: (item: ImportItemWrapper<T>) -> Boolean = { true },
     onItemBlockedClick: (item: ImportItemWrapper<T>) -> Unit = {},
+    showLoadingState: Boolean = true,
 ) {
     val loadingState = importState as? BaseImportUiState.Loading
-    // 大文件处理期间只显示阶段文字，保留书源管理页面和底部提示，不显示无感知的旋转齿轮。
-    AppModalBottomSheet(
-        show = loadingState != null,
-        onDismissRequest = onDismissRequest,
-        title = loadingState?.message ?: stringResource(R.string.loading),
-        modifier = Modifier.heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.35f),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            AppText(loadingState?.message ?: stringResource(R.string.loading))
-        }
+    if (showLoadingState) {
+        // 通用导入保留原有的加载弹窗；书源页面通过 showLoadingState=false 单独改用文字提示。
+        AppAlertDialog(
+            data = loadingState,
+            onDismissRequest = onDismissRequest,
+            title = stringResource(R.string.loading),
+            content = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AppCircularProgressIndicator()
+                }
+            },
+        )
     }
 
     AppAlertDialog(
