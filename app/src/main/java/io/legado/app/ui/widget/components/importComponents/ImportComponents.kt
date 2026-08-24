@@ -127,6 +127,7 @@ fun <T> BatchImportDialog(
     itemTitle: (data: T) -> String,
     itemSubtitle: (data: T) -> String? = { null },
     itemConflictSubtitle: @Composable (item: ImportItemWrapper<T>) -> String? = { itemSubtitle(it.data) },
+    itemDetailText: @Composable (item: ImportItemWrapper<T>) -> String? = itemConflictSubtitle,
     onSetItemDecision: ((index: Int, decision: ImportDecision) -> Unit)? = null,
     itemDecisionLabel: @Composable (decision: ImportDecision?) -> String? = { null },
     itemCanKeepBoth: (item: ImportItemWrapper<T>) -> Boolean = { true },
@@ -309,7 +310,7 @@ fun <T> BatchImportDialog(
         show = infoItem != null,
         onDismissRequest = { infoIndex = null },
         title = infoItem?.let { itemTitle(it.data) },
-        text = infoItem?.let { itemConflictSubtitle(it) },
+        text = infoItem?.let { itemDetailText(it) },
         confirmText = stringResource(R.string.edit),
         onConfirm = {
             editingIndex = infoIndex

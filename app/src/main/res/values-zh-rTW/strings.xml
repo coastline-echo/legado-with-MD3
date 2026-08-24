@@ -2885,6 +2885,17 @@
     <string name="import_detail_host">網站：%1$s</string>
     <string name="import_detail_search_url_hint">搜尋地址相同：%1$s</string>
     <string name="import_detail_local_source">本地已有：%1$s</string>
+    <string name="import_detail_name">名稱：%1$s</string>
+    <string name="import_detail_status">狀態：%1$s</string>
+    <string name="import_detail_address">地址：%1$s</string>
+    <string name="import_detail_type_group">類型：%1$s；分組：%2$s</string>
+    <string name="import_source_type_text">文字</string>
+    <string name="import_source_type_audio">音訊</string>
+    <string name="import_source_type_image">圖片</string>
+    <string name="import_source_type_file">檔案</string>
+    <string name="import_detail_rules">規則：%1$s</string>
+    <string name="import_rule_configured_unverified">已配置未驗證</string>
+    <string name="import_rule_not_configured">未配置</string>
     <string name="import_progress_reading">正在讀取導入內容…</string>
     <string name="import_progress_parsing">正在解析書源內容…</string>
     <string name="import_progress_checking">正在檢查書源是否重複…</string>
@@ -2908,6 +2919,7 @@
     <string name="book_source_duplicate_no_result">未發現重複書源候選</string>
     <string name="book_source_duplicate_recommended">建議保留</string>
     <string name="book_source_duplicate_referenced_books">關聯書籍：%1$d 本</string>
+    <string name="book_source_duplicate_score">比較分數：%1$d</string>
     <string name="book_source_duplicate_source_state">Cookie：%1$s，變數/快取：%2$s</string>
     <string name="book_source_duplicate_same_host">完整主機名相同</string>
     <string name="book_source_duplicate_normalized_url">規範化 URL 相同</string>
@@ -2915,6 +2927,8 @@
     <string name="book_source_duplicate_similar_structure">規則結構相似候選</string>
     <string name="book_source_duplicate_similar_name">名稱相似候選</string>
     <string name="book_source_duplicate_edit">編輯書源</string>
+    <string name="book_source_duplicate_disable">停用書源</string>
+    <string name="book_source_duplicate_enable">啟用書源</string>
     <string name="book_source_duplicate_mark_retain">標記保留</string>
     <string name="book_source_duplicate_unmark_retain">取消保留標記</string>
     <string name="book_source_duplicate_ignore">忽略此分組</string>

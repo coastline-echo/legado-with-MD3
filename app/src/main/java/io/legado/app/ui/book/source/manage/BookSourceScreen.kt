@@ -344,7 +344,7 @@ fun BookSourceScreen(
         itemSubtitle = { it.bookSourceUrl },
         itemConflictSubtitle = { item ->
             buildString {
-                append(item.data.bookSourceUrl)
+                append(item.data.bookSourceName.ifBlank { item.data.bookSourceUrl })
                 val conflictReason = item.conflictReason
                 if (conflictReason != null) {
                     val reason = when (conflictReason) {
@@ -424,6 +424,55 @@ fun BookSourceScreen(
                             )
                         )
                     }
+                }
+            }
+        },
+        itemDetailText = { item ->
+            val source = item.data
+            buildString {
+                appendLine(stringResource(R.string.import_detail_name, source.bookSourceName.ifBlank { "-" }))
+                appendLine(stringResource(R.string.import_detail_address, source.bookSourceUrl))
+                appendLine(stringResource(R.string.import_detail_status,
+                    stringResource(
+                        when (item.status) {
+                            ImportStatus.New -> R.string.import_status_new
+                            ImportStatus.Update -> R.string.import_status_update
+                            ImportStatus.Existing -> R.string.import_status_existing
+                            ImportStatus.RawSourceKeyConflict -> R.string.import_status_raw_source_key_conflict
+                            ImportStatus.NormalizedConflict -> R.string.import_status_normalized_conflict
+                            ImportStatus.HostConflict -> R.string.import_status_host_conflict
+                            ImportStatus.InternalDuplicate -> R.string.import_status_internal_duplicate
+                            ImportStatus.InvalidUrl -> R.string.import_status_invalid_url
+                            ImportStatus.InvalidPattern -> R.string.import_status_invalid_pattern
+                            ImportStatus.MissingSourceKey -> R.string.import_status_missing_source_key
+                            ImportStatus.IncompleteImport -> R.string.import_status_incomplete_import
+                            ImportStatus.IncompleteLocal -> R.string.import_status_incomplete_local
+                            ImportStatus.Error -> R.string.import_status_error
+                        }
+                    )
+                    )
+                )
+                val sourceType = when (source.bookSourceType) {
+                    1 -> stringResource(R.string.import_source_type_audio)
+                    2 -> stringResource(R.string.import_source_type_image)
+                    3 -> stringResource(R.string.import_source_type_file)
+                    else -> stringResource(R.string.import_source_type_text)
+                }
+                appendLine(stringResource(R.string.import_detail_type_group, sourceType, source.bookSourceGroup ?: "-"))
+                val configured = stringResource(R.string.import_rule_configured_unverified)
+                val notConfigured = stringResource(R.string.import_rule_not_configured)
+                val rules = listOf(
+                    "${stringResource(R.string.source_tab_search)}：${if (source.ruleSearch != null) configured else notConfigured}",
+                    "${stringResource(R.string.source_tab_find)}：${if (source.ruleExplore != null) configured else notConfigured}",
+                    "${stringResource(R.string.source_tab_info)}：${if (source.ruleBookInfo != null) configured else notConfigured}",
+                    "${stringResource(R.string.source_tab_toc)}：${if (source.ruleToc != null) configured else notConfigured}",
+                    "${stringResource(R.string.source_tab_content)}：${if (source.ruleContent != null) configured else notConfigured}",
+                    "${stringResource(R.string.login)}：${if (!source.loginUrl.isNullOrBlank()) configured else notConfigured}",
+                ).joinToString("；")
+                appendLine(stringResource(R.string.import_detail_rules, rules))
+                itemConflictSubtitle(item)?.let {
+                    val extra = it.substringAfter('\n', "")
+                    if (extra.isNotEmpty()) appendLine(extra)
                 }
             }
         },
@@ -521,6 +570,7 @@ fun BookSourceScreen(
         onDismissRequest = { showDedupDialog = false },
         onRescan = { onIntent(BookSourceIntent.ScanDuplicateSources) },
         onEditSource = onEditSource,
+        onSetEnabled = { sourceUrl, enabled -> onIntent(BookSourceIntent.SetEnabled(sourceUrl, enabled)) },
         onToggleRetained = { onIntent(BookSourceIntent.ToggleDedupRetained(it)) },
         onIgnoreGroup = { onIntent(BookSourceIntent.IgnoreDedupGroup(it)) },
     )
@@ -931,6 +981,7 @@ private fun BookSourceDedupDialog(
     onDismissRequest: () -> Unit,
     onRescan: () -> Unit,
     onEditSource: (String) -> Unit,
+    onSetEnabled: (String, Boolean) -> Unit,
     onToggleRetained: (String) -> Unit,
     onIgnoreGroup: (String) -> Unit,
 ) {
@@ -978,6 +1029,14 @@ private fun BookSourceDedupDialog(
                                                 R.string.book_source_duplicate_referenced_books,
                                                 source.referencedBookCount,
                                             ))
+                                            append("\n")
+                                            append(stringResource(R.string.book_source_duplicate_score, source.score))
+                                            append("\n")
+                                            append(stringResource(
+                                                R.string.book_source_duplicate_source_state,
+                                                if (source.hasCookie) stringResource(R.string.yes) else stringResource(R.string.no),
+                                                if (source.hasVariablesOrCache) stringResource(R.string.yes) else stringResource(R.string.no),
+                                            ))
                                             source.reasons.forEach { reason ->
                                                 append("\n")
                                                 append(stringResource(reason.stringRes))
@@ -988,6 +1047,13 @@ private fun BookSourceDedupDialog(
                                     SmallPlainButton(
                                         text = stringResource(R.string.book_source_duplicate_edit),
                                         onClick = { onEditSource(source.sourceUrl) },
+                                    )
+                                    SmallPlainButton(
+                                        text = stringResource(
+                                            if (source.enabled) R.string.book_source_duplicate_disable
+                                            else R.string.book_source_duplicate_enable,
+                                        ),
+                                        onClick = { onSetEnabled(source.sourceUrl, !source.enabled) },
                                     )
                                     SmallPlainButton(
                                         text = if (source.retained) {

@@ -22,6 +22,8 @@ data class ImportItemWrapper<T>(
     val localMetadata: ImportLocalMetadata? = null,
     /** 导入文件内用于连续展示的书源身份。 */
     val duplicateGroupKey: String? = null,
+    /** 仅用于按名称、地址和搜索入口的关联关系连续展示。 */
+    val displayGroupKey: String? = null,
     /** 仅用于同组排序，不代表验证结果。 */
     val valueScore: Int = 0,
     val originalIndex: Int = 0,

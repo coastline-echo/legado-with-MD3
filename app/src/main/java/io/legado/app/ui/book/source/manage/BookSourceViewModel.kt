@@ -64,6 +64,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 class BookSourceViewModel(
     private val application: Application,
@@ -465,6 +466,7 @@ class BookSourceViewModel(
                                 BookSourceDedupSourceUi(
                                     sourceUrl = profile.source.bookSourceUrl,
                                     name = profile.source.bookSourceName,
+                                    enabled = profile.source.enabled,
                                     referencedBookCount = profile.referencedBookCount,
                                     score = profile.score,
                                     reasons = profile.reasons.toImmutableList(),
@@ -590,6 +592,7 @@ class BookSourceViewModel(
                 }
             }
             enabledOverrides.update { it - id }
+            if (dedupGroups.value.isNotEmpty()) scanDuplicateSources()
         }
     }
 
@@ -697,7 +700,29 @@ class BookSourceViewModel(
                         originalIndex = index,
                         duplicateGroupKey = bookSourceImportDuplicateKey(source.bookSourceUrl),
                         valueScore = dedupUseCase.importValueScore(source),
+                        displayKeys = buildSet {
+                            normalizeImportDisplayName(source.bookSourceName)?.let(::add)
+                            source.bookSourceUrl.takeIf(String::isNotBlank)?.let { add("url:${bookSourceImportDuplicateKey(it)}") }
+                            normalizeSearchUrlHint(source.searchUrl)?.let { add("search:$it") }
+                        },
                     )
+                }
+                val displayGroupKeys = linkedMapOf<Int, String>()
+                val displayGroups = mutableListOf<MutableSet<Int>>()
+                importEntries.forEach { entry ->
+                    val matching = displayGroups.filter { group ->
+                        group.any { index -> importEntries[index].displayKeys.any(entry.displayKeys::contains) }
+                    }
+                    val group = matching.firstOrNull() ?: linkedSetOf<Int>().also(displayGroups::add)
+                    matching.drop(1).forEach { other -> group += other; displayGroups.remove(other) }
+                    group += entry.originalIndex
+                }
+                displayGroups.forEachIndexed { index, group ->
+                    val label = group.asSequence()
+                        .mapNotNull { importEntries[it].source.bookSourceName.trim().takeIf(String::isNotEmpty) }
+                        .minOrNull()
+                        ?: group.asSequence().map { importEntries[it].source.bookSourceUrl }.minOrNull().orEmpty()
+                    group.forEach { displayGroupKeys[it] = "${label.lowercase(Locale.ROOT)}\u0000$index" }
                 }
                 val canonicalIndexes = importEntries.groupBy { it.duplicateGroupKey }
                     .mapValues { (_, entries) -> entries.maxWithOrNull(compareBy<ImportSourceEntry> { it.valueScore }.thenByDescending { -it.originalIndex })?.originalIndex }
@@ -782,6 +807,7 @@ class BookSourceViewModel(
                                 )
                             },
                             duplicateGroupKey = entry.duplicateGroupKey,
+                            displayGroupKey = displayGroupKeys[entry.originalIndex],
                             valueScore = entry.valueScore,
                             originalIndex = entry.originalIndex,
                     )
@@ -790,7 +816,8 @@ class BookSourceViewModel(
                 BaseImportUiState.Success(
                     source = input,
                     items = wrappers.sortedWith(
-                        compareBy<ImportItemWrapper<BookSource>> { it.duplicateGroupKey ?: "\uFFFF" }
+                        compareBy<ImportItemWrapper<BookSource>> { it.displayGroupKey ?: "\uFFFF" }
+                            .thenBy { it.duplicateGroupKey ?: "\uFFFF" }
                             .thenByDescending { it.valueScore }
                             .thenBy { importStatusPriority(it.status) }
                             .thenBy { it.originalIndex }
@@ -1018,7 +1045,13 @@ private data class ImportSourceEntry(
     val originalIndex: Int,
     val duplicateGroupKey: String,
     val valueScore: Int,
+    val displayKeys: Set<String>,
 )
+
+private fun normalizeImportDisplayName(value: String): String? = value
+    .filterNot { it.isWhitespace() || it.isISOControl() }
+    .lowercase(Locale.ROOT)
+    .takeIf(String::isNotEmpty)
 
 private fun normalizeSearchUrlHint(value: String?): String? = value
     ?.filterNot { it.isWhitespace() || it.isISOControl() }

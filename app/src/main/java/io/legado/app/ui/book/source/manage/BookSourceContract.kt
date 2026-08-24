@@ -47,6 +47,7 @@ data class BookSourceCheckOptionsUi(
 data class BookSourceDedupSourceUi(
     val sourceUrl: String,
     val name: String,
+    val enabled: Boolean,
     val referencedBookCount: Int,
     val score: Int,
     val reasons: ImmutableList<BookSourceRecommendationReason>,
@@ -89,8 +90,7 @@ data class BookSourceUiState(
     val importState: BaseImportUiState<BookSource> = BaseImportUiState.Idle,
     val checkProgress: String? = null,
     val checkOptions: BookSourceCheckOptionsUi = BookSourceCheckOptionsUi(),
-    // 导入过程由独立的批量弹窗展示，不能让书源列表进入页面级 loading。
-    val interaction: InteractionState = InteractionState(),
+    val interaction: InteractionState = InteractionState(isLoading = true),
     val dedupGroups: ImmutableList<BookSourceDedupGroupUi> = persistentListOf(),
     val dedupScanning: Boolean = false,
     val deletePreview: BookSourceDeletePreviewUi? = null,
