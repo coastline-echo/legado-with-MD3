@@ -10,6 +10,7 @@ import io.legado.app.data.appDb
 import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.model.BackupSensitiveCategory
+import io.legado.app.domain.model.BackupRestoreStage
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.DirectLinkUpload
@@ -67,6 +68,18 @@ object Backup {
     val zipFilePath = "${appCtx.externalFiles.absolutePath}${File.separator}tmp_backup.zip"
 
     private const val TAG = "Backup"
+
+    /** 备份完整性报告中必须关注的应用壳和导航键。 */
+    private val requiredConfigKeys = setOf(
+        PreferKey.mainNavigationOrder,
+        PreferKey.showBottomView,
+        PreferKey.navExtended,
+        PreferKey.navIconHome,
+        PreferKey.navIconBookshelf,
+        PreferKey.navIconExplore,
+        PreferKey.navIconRss,
+        PreferKey.navIconMy,
+    )
 
     private val backupFileNames by lazy {
         arrayOf(
@@ -147,7 +160,7 @@ object Backup {
     }
 
     private suspend fun backup(context: Context, path: String?, mode: String = "both") {
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("准备数据"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PREPARE))
         LogUtils.d(TAG, "开始备份 path:$path")
         LocalConfig.lastBackup = System.currentTimeMillis()
         val aes = BackupAES()
@@ -157,7 +170,7 @@ object Backup {
             "bookshelf.json",
             backupPath,
         )
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("导出数据库"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PREPARE))
         // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
         if (BackupConfig.dbIsNotIgnored("bookmark", true)) {
             writeListToJson(appDb.bookmarkDao.all, "bookmark.json", backupPath)
@@ -274,6 +287,7 @@ object Backup {
             }
         }
         currentCoroutineContext().ensureActive()
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PROCESS_RESOURCES))
         val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
         val writtenConfigKeys = mutableSetOf<String>()
@@ -323,8 +337,8 @@ object Backup {
         FileUtils.createFileIfNotExist(backupPath + File.separator + "config.xml")
             .writeText(xmlBuilder.toString())
 
-        val resourceFiles = copyBackgroundResources(backupPath)
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("处理图片资源", resourceFiles.size, resourceFiles.size))
+        val (resourceFiles, resourceAliases) = copyBackgroundResources(backupPath)
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PROCESS_RESOURCES, resourceFiles.size, resourceFiles.size))
 
         val filesForManifest = backupFileNames
             .filter { it != "manifest.json" }
@@ -339,8 +353,16 @@ object Backup {
             configKeys = writtenConfigKeys,
             ignoredConfigKeys = ignoredConfigKeys,
             unsupportedConfigKeys = unsupportedConfigKeys,
+            notSetConfigKeys = BackupConfigIntegrityChecker.check(
+                snapshotKeys = configMap.keys,
+                written = writtenConfigKeys,
+                ignored = ignoredConfigKeys,
+                unsupported = unsupportedConfigKeys,
+                requiredKeys = requiredConfigKeys,
+            ).notSet,
             appVersion = BuildConfig.VERSION_NAME,
             resources = resourceFiles,
+            resourceAliases = resourceAliases,
             sensitiveIncluded = filesForManifest.any { it.name == "servers.json" } ||
                 PreferKey.webDavPassword in writtenConfigKeys,
             sensitiveItems = buildSet {
@@ -357,7 +379,7 @@ object Backup {
         )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
             .writeText(GSON.toJson(manifest))
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("生成校验清单", filesForManifest.size, filesForManifest.size))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.GENERATE_MANIFEST, filesForManifest.size, filesForManifest.size))
 
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
@@ -369,8 +391,9 @@ object Backup {
             zipFileName
         }
         if (zipBackupDirectory(File(backupPath), File(zipFilePath))) {
-            BackupRestoreProgressBus.emit(BackupRestoreProgress("生成 ZIP"))
+            BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.GENERATE_ZIP))
             if (mode == "both" || mode == "local") {
+                BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.WRITE_LOCAL))
                 when {
                     path.isNullOrBlank() -> {
                         copyBackup(context.getExternalFilesDir(null)!!, backupFileName)
@@ -386,7 +409,7 @@ object Backup {
                 }
             }
             if (mode == "both" || mode == "webdav") {
-                BackupRestoreProgressBus.emit(BackupRestoreProgress("上传 WebDAV"))
+                BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.UPLOAD_WEBDAV))
                 try {
                     AppWebDav.backUpWebDav(zipFileName)
                 } catch (e: Exception) {
@@ -397,7 +420,7 @@ object Backup {
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("完成"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.COMPLETE))
     }
 
     private fun manifestCategory(fileName: String): String = when (fileName) {
@@ -469,17 +492,20 @@ object Backup {
     )
 
     /** 将配置引用的背景图片复制进 ZIP，避免依赖设备绝对路径或独立 WebDAV 目录。 */
-    private fun copyBackgroundResources(rootPath: String): List<File> {
+    private fun copyBackgroundResources(rootPath: String): Pair<List<File>, Map<String, String>> {
         val targetDir = File(rootPath, "assets/background").apply { mkdirs() }
-        return readStyleGateway.allBackgroundImagePaths().mapNotNull { path ->
+        val aliases = linkedMapOf<String, String>()
+        val files = readStyleGateway.allBackgroundImagePaths().mapNotNull { path ->
             val source = if (path.contains(File.separator)) File(path) else appCtx.externalFiles.getFile("bg", path)
             if (!source.isFile) return@mapNotNull null
             val hash = source.sha256()
             val extension = source.extension.takeIf { it.isNotBlank() }?.let { ".${it.lowercase(Locale.ROOT)}" } ?: ""
             val target = File(targetDir, "$hash$extension")
             if (!target.exists()) source.copyTo(target, overwrite = false)
+            aliases[source.name] = "assets/background/${target.name}"
             target
         }
+        return files to aliases
     }
 
     private fun File.sha256(): String {

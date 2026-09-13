@@ -3,6 +3,7 @@ package io.legado.app.data.repository
 import io.legado.app.domain.gateway.WebDavBackupGateway
 import io.legado.app.domain.model.WebDavBackup
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.storage.Backup
 import kotlinx.coroutines.Dispatchers.IO
@@ -55,9 +56,13 @@ class WebDavBackupRepository : WebDavBackupGateway {
         }
     }
 
-    override suspend fun restore(name: String, mode: RestoreMode) {
+    override suspend fun restore(name: String, mode: RestoreMode, backupPassword: String?) {
         withContext(IO) {
-            AppWebDav.restoreWebDav(name, mode)
+            AppWebDav.restoreWebDav(name, mode, backupPassword)
         }
+    }
+
+    override suspend fun preview(name: String): RestorePreview = withContext(IO) {
+        AppWebDav.previewWebDav(name)
     }
 }

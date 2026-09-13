@@ -7,4 +7,6 @@ data class RestorePreview(
     val resourceCount: Int,
     val categories: Map<String, Int>,
     val warnings: List<String>,
+    val sensitiveIncluded: Boolean = false,
+    val weakProtection: Boolean = false,
 )

@@ -68,6 +68,18 @@ class NormalizeConfigMapTest {
     }
 
     @Test
+    fun `new format skips encrypted password when decryption fails`() {
+        val result = normalizeConfigMap(
+            mapOf(PreferKey.webDavPassword to "encrypted"),
+            keyIsNotIgnore = { true },
+            decryptWebDavPassword = { null },
+            hasLocalWebDavPassword = false,
+            allowLegacyPlaintextFallback = false,
+        )
+        assertFalse(result.containsKey(PreferKey.webDavPassword))
+    }
+
+    @Test
     fun `webDavPassword 解密失败且本地已有密码时丢弃`() {
         val result = normalize(
             mapOf(PreferKey.webDavPassword to "rawPassword"),

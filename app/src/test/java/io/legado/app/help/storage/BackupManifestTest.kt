@@ -51,4 +51,21 @@ class BackupManifestTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `manifest records nested resource path separately`() {
+        val root = createTempDirectory("backup-manifest").toFile()
+        try {
+            val resource = File(root, "assets/background/abc.png").apply {
+                requireNotNull(parentFile).mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3))
+            }
+            val manifest = BackupManifestBuilder.build(root, emptyList(), resources = listOf(resource))
+            assertEquals("assets/background/abc.png", manifest.resources.single().name)
+            assertEquals(3L, manifest.resources.single().size)
+            assertEquals(64, manifest.resources.single().sha256.length)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

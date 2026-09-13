@@ -41,6 +41,7 @@ import io.legado.app.domain.gateway.AppLocaleGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
+import io.legado.app.domain.model.BackupRestoreStage
 import io.legado.app.ui.book.read.ConfigUpdateAction
 import io.legado.app.ui.book.read.ReadConfigUpdateBus
 import io.legado.app.help.DirectLinkUpload
@@ -80,6 +81,7 @@ import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipInputStream
+import java.io.ByteArrayOutputStream
 
 /**
  * 恢复
@@ -94,6 +96,7 @@ object Restore : KoinComponent {
     /** 只读取 ZIP 结构和 manifest，不触碰应用数据。 */
     suspend fun preview(context: Context, uri: Uri): RestorePreview = withContext(IO) {
         val entries = mutableListOf<String>()
+        var manifest: BackupManifest? = null
         val manifestBytes = kotlin.runCatching {
             val input = if (uri.isContentScheme()) {
                 DocumentFile.fromSingleUri(context, uri)?.openInputStream()
@@ -104,6 +107,13 @@ object Restore : KoinComponent {
                 var entry = zip.nextEntry
                 while (entry != null) {
                     if (!entry.isDirectory) {
+                        if (entry.name == "manifest.json") {
+                            val bytes = ByteArrayOutputStream()
+                            zip.copyTo(bytes)
+                            manifest = runCatching {
+                                GSON.fromJson(bytes.toString(Charsets.UTF_8), BackupManifest::class.java)
+                            }.getOrNull()
+                        }
                         entries += entry.name
                         zip.closeEntry()
                     }
@@ -128,6 +138,26 @@ object Restore : KoinComponent {
             resourceCount = manifestBytes.count { it.startsWith("assets/") },
             categories = categoryCounts,
             warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else emptyList(),
+            sensitiveIncluded = manifest?.sensitiveIncluded == true,
+            weakProtection = manifest?.weakProtection == true,
+        )
+    }
+
+    /** WebDAV 已下载并解压到临时目录时使用的预览入口。 */
+    internal fun previewUnzipped(path: String): RestorePreview {
+        val root = File(path)
+        val files = root.walkTopDown().filter(File::isFile).map { root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') }.toList()
+        val categories = files.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
+        files.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let { categories["resources"] = it }
+        val legacy = !File(root, "manifest.json").isFile
+        return RestorePreview(
+            legacyFormat = legacy,
+            fileCount = files.count { !it.startsWith("assets/") },
+            resourceCount = files.count { it.startsWith("assets/") },
+            categories = categories,
+            warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else BackupManifestScanner.scan(root).warnings,
+            sensitiveIncluded = BackupManifestScanner.scan(root).manifest?.sensitiveIncluded == true,
+            weakProtection = BackupManifestScanner.scan(root).manifest?.weakProtection == true,
         )
     }
 
@@ -153,6 +183,7 @@ object Restore : KoinComponent {
         uri: Uri,
         mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
         selectedCategories: Set<String> = emptySet(),
+        backupPassword: String? = null,
     ) {
         BackupRestoreLock.withLock {
             LogUtils.d(TAG, "开始恢复备份 uri:$uri")
@@ -170,7 +201,7 @@ object Restore : KoinComponent {
             }
             if (unzipResult.isSuccess) {
                 kotlin.runCatching {
-                    restoreUnzipped(Backup.backupPath, mode, selectedCategories)
+                    restoreUnzipped(Backup.backupPath, mode, selectedCategories, backupPassword)
                     LocalConfig.lastBackup = System.currentTimeMillis()
                 }.onFailure {
                     appCtx.toastOnUi("恢复备份出错\n${it.localizedMessage}")
@@ -184,9 +215,10 @@ object Restore : KoinComponent {
         path: String,
         mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
         selectedCategories: Set<String> = emptySet(),
+        backupPassword: String? = null,
     ) {
         BackupRestoreLock.withLock {
-            restoreUnzipped(path, mode, selectedCategories)
+            restoreUnzipped(path, mode, selectedCategories, backupPassword)
         }
     }
 
@@ -194,19 +226,33 @@ object Restore : KoinComponent {
         path: String,
         mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
         selectedCategories: Set<String> = emptySet(),
+        backupPassword: String? = null,
     ) {
         val scan = BackupManifestScanner.scan(File(path))
         scan.warnings.forEach { warning ->
             AppLog.put("恢复备份校验警告：$warning")
         }
-        restore(path, mode, selectedCategories)
+        BackupRestoreProgressBus.emit(
+            BackupRestoreProgress(
+                stage = BackupRestoreStage.READ_BACKUP,
+                warnings = scan.warnings.size,
+            )
+        )
+        restore(path, mode, selectedCategories, backupPassword, allowLegacyPlaintextFallback = scan.legacyFormat)
     }
 
-    private suspend fun restore(path: String, mode: RestoreMode, selectedCategories: Set<String>) {
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("读取备份"))
+    private suspend fun restore(
+        path: String,
+        mode: RestoreMode,
+        selectedCategories: Set<String>,
+        backupPassword: String? = null,
+        allowLegacyPlaintextFallback: Boolean = true,
+    ) {
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.READ_BACKUP))
         fun selected(category: String): Boolean =
             mode != RestoreMode.BY_CATEGORY || category in selectedCategories
-        val aes = BackupAES()
+        val aes = BackupAES(backupPassword)
+        if (selected("resources")) restoreBackgroundResources(path)
         if (selected("bookshelf")) fileToListT<Book>(path, "bookshelf.json")?.let {
             it.forEach { book ->
                 book.upType()
@@ -497,23 +543,24 @@ object Restore : KoinComponent {
             )
         }
         // 恢复配置文件 (手动解析 XML，替代反射逻辑)
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_CONFIG))
         val configFile = File(path, "config.xml")
         if (selected("settings") && configFile.exists()) {
             try {
                 val map = readXmlToMap(configFile)
                 if (map.isNotEmpty()) {
-                    applyConfigMap(map, aes, mode)
+                    applyConfigMap(map, aes, mode, allowLegacyPlaintextFallback)
                 }
             } catch (e: Exception) {
                 AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
             }
         }
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("恢复书架"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_BOOKSHELF))
 
-        if (selected("resources")) restoreBackgroundResources(path)
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("恢复图片"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_RESOURCES))
 
         appCtx.toastOnUi(R.string.restore_success)
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.REFRESH_RUNTIME))
         withContext(Main) {
             delay(100)
             get<AppLocaleGateway>().apply { setLanguage(currentLanguage) }
@@ -522,7 +569,7 @@ object Restore : KoinComponent {
             }
             ThemeConfigStore.applyDayNight(appCtx)
         }
-        BackupRestoreProgressBus.emit(BackupRestoreProgress("完成"))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.COMPLETE))
     }
 
     private fun localBookLocationStatus(bookUrl: String): LocalBookLocationStatus {
@@ -564,6 +611,22 @@ object Restore : KoinComponent {
                 source.copyTo(target, overwrite = true)
             }.onFailure { error ->
                 AppLog.put("恢复背景图片失败：${resource.name}\n${error.localizedMessage}", error)
+            }
+        }
+        if (manifest.resourceAliases.isNotEmpty()) {
+            val files = listOf(
+                File(path, "config.xml"),
+                File(path, ReadBookConfig.configFileName),
+                File(path, ReadBookConfig.shareConfigFileName),
+                File(path, ThemeConfigStore.configFileName),
+            )
+            files.filter(File::isFile).forEach { file ->
+                var text = file.readText()
+                manifest.resourceAliases.forEach { (alias, relative) ->
+                    val localName = relative.substringAfterLast('/')
+                    text = text.replace(alias, targetDir.resolve(localName).absolutePath)
+                }
+                file.writeText(text)
             }
         }
     }
@@ -663,13 +726,19 @@ object Restore : KoinComponent {
         }
     }
 
-    private suspend fun applyConfigMap(map: Map<String, Any?>, aes: BackupAES, mode: RestoreMode) {
+    private suspend fun applyConfigMap(
+        map: Map<String, Any?>,
+        aes: BackupAES,
+        mode: RestoreMode,
+        allowLegacyPlaintextFallback: Boolean,
+    ) {
         val finalMap = normalizeConfigMap(
             map = map,
             keyIsNotIgnore = { BackupConfig.keyIsNotIgnore(it) },
             decryptWebDavPassword = { runCatching { aes.decryptStr(it) }.getOrNull() },
             hasLocalWebDavPassword = !appCtx.getPrefString(PreferKey.webDavPassword)
                 .isNullOrBlank(),
+            allowLegacyPlaintextFallback = allowLegacyPlaintextFallback,
         )
         // 经快照层批量恢复：立即对读侧生效（onRestoreFinish 的读取不再依赖回灌时机），单次原子 edit 落盘
         val valuesToApply = if (mode == RestoreMode.USE_BACKUP) {

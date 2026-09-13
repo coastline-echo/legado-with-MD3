@@ -45,6 +45,7 @@ import io.legado.app.R
 import io.legado.app.help.storage.ImportOldData
 import io.legado.app.help.storage.BackupPasswordPolicyResolver
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.BackupRestoreStage
 import io.legado.app.lib.permission.Permissions
 import io.legado.app.lib.permission.PermissionsCompat
 import io.legado.app.ui.theme.LegadoTheme
@@ -621,7 +622,8 @@ private fun BackupConfigDialogs(
     AppAlertDialog(
         show = loading != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
-        title = loading?.progress?.stage ?: loading?.let { stringResource(it.titleRes) }.orEmpty(),
+        title = loading?.progress?.stage?.localizedTitle()
+            ?: loading?.let { stringResource(it.titleRes) }.orEmpty(),
         text = loading?.progress?.let {
             stringResource(R.string.backup_restore_progress_summary, it.current, it.total, it.warnings, it.failures)
         },
@@ -641,6 +643,14 @@ private fun BackupConfigDialogs(
             )
         }.orEmpty(),
         content = {
+            if (preview?.preview?.sensitiveIncluded == true) {
+                AppTextField(
+                    value = preview.backupPassword,
+                    onValueChange = { onIntent(BackupConfigIntent.SetRestoreBackupPassword(it)) },
+                    label = stringResource(R.string.backup_password),
+                    backgroundColor = LegadoTheme.colorScheme.surface,
+                )
+            }
             if (preview?.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY) {
                 preview.selectedCategories.forEach { category ->
                     CheckboxItem(
@@ -652,11 +662,33 @@ private fun BackupConfigDialogs(
             }
         },
         confirmText = stringResource(R.string.restore),
-        onConfirm = { preview?.let { onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri)) } },
+        onConfirm = { preview?.let {
+            if (it.networkName != null) onIntent(BackupConfigIntent.ConfirmNetworkRestorePreview(it.networkName))
+            else onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri))
+        } },
         dismissText = stringResource(R.string.cancel),
         onDismiss = { onIntent(BackupConfigIntent.DismissDialog) },
     )
 }
+
+@Composable
+private fun BackupRestoreStage.localizedTitle(): String = stringResource(
+    when (this) {
+        BackupRestoreStage.PREPARE -> R.string.backup_stage_prepare
+        BackupRestoreStage.EXPORT_DATABASE -> R.string.backup_stage_database
+        BackupRestoreStage.PROCESS_RESOURCES -> R.string.backup_stage_resources
+        BackupRestoreStage.GENERATE_MANIFEST -> R.string.backup_stage_manifest
+        BackupRestoreStage.GENERATE_ZIP -> R.string.backup_stage_zip
+        BackupRestoreStage.WRITE_LOCAL -> R.string.backup_stage_local
+        BackupRestoreStage.UPLOAD_WEBDAV -> R.string.backup_stage_webdav
+        BackupRestoreStage.READ_BACKUP -> R.string.restore_stage_read
+        BackupRestoreStage.RESTORE_BOOKSHELF -> R.string.restore_stage_bookshelf
+        BackupRestoreStage.RESTORE_CONFIG -> R.string.restore_stage_config
+        BackupRestoreStage.RESTORE_RESOURCES -> R.string.restore_stage_resources
+        BackupRestoreStage.REFRESH_RUNTIME -> R.string.restore_stage_refresh
+        BackupRestoreStage.COMPLETE -> R.string.restore_stage_complete
+    }
+)
 
 
 @Composable

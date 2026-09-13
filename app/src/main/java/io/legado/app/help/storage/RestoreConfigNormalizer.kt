@@ -14,6 +14,7 @@ internal fun normalizeConfigMap(
     keyIsNotIgnore: (String) -> Boolean,
     decryptWebDavPassword: (String) -> String?,
     hasLocalWebDavPassword: Boolean,
+    allowLegacyPlaintextFallback: Boolean = true,
 ): Map<String, Any> {
     val finalMap = mutableMapOf<String, Any>()
     map.forEach { (key, value) ->
@@ -21,7 +22,7 @@ internal fun normalizeConfigMap(
         when (key) {
             PreferKey.webDavPassword -> {
                 val password = decryptWebDavPassword(value.toString())
-                    ?: value.toString().takeIf { !hasLocalWebDavPassword }
+                    ?: value.toString().takeIf { allowLegacyPlaintextFallback && !hasLocalWebDavPassword }
                 password?.let { finalMap[key] = it }
             }
 

@@ -13,6 +13,7 @@ import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
 import io.legado.app.help.storage.Restore
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 import io.legado.app.lib.webdav.Authorization
 import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
@@ -138,7 +139,7 @@ object AppWebDav {
     }
 
     @Throws(WebDavException::class)
-    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
+    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION, backupPassword: String? = null) {
         authorization?.let {
             val webDav = WebDav(rootWebDavUrl + name, it)
             BackupRestoreLock.withLock {
@@ -149,7 +150,7 @@ object AppWebDav {
                 if (!File(Backup.backupPath, "manifest.json").isFile) {
                     downloadLegacyBackgrounds(File(Backup.backupPath, "assets/background"))
                 }
-                Restore.restoreUnzipped(Backup.backupPath, mode)
+                Restore.restoreUnzipped(Backup.backupPath, mode, backupPassword = backupPassword)
                 LocalConfig.lastBackup = System.currentTimeMillis()
             }
         }
@@ -259,6 +260,19 @@ object AppWebDav {
         val bgWebDavFiles = getAllBgWebDavFiles().getOrThrow()
             .map { it.displayName }
             .toSet()
+    }
+
+    suspend fun previewWebDav(name: String): RestorePreview {
+        val auth = authorization ?: throw NoStackTraceException("webDav没有配置")
+        return BackupRestoreLock.withLock {
+            WebDav(rootWebDavUrl + name, auth).downloadTo(Backup.zipFilePath, true)
+            FileUtils.delete(Backup.backupPath)
+            ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
+            if (!File(Backup.backupPath, "manifest.json").isFile) {
+                downloadLegacyBackgrounds(File(Backup.backupPath, "assets/background"))
+            }
+            Restore.previewUnzipped(Backup.backupPath)
+        }
     }
 
     private suspend fun downloadLegacyBackgrounds(targetDir: File) {

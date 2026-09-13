@@ -10,6 +10,7 @@ interface BackupRestoreGateway {
         uri: String,
         mode: RestoreMode,
         selectedCategories: Set<String> = emptySet(),
+        backupPassword: String? = null,
     ) = restoreLocal(uri)
     suspend fun previewLocal(uri: String): RestorePreview
 }

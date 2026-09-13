@@ -121,6 +121,7 @@ class BackupConfigViewModel(
             is BackupConfigIntent.RequestLocalRestore -> requestLocalRestore(intent.mode)
             is BackupConfigIntent.RestoreLocal -> restoreLocal(intent.uri)
             is BackupConfigIntent.ConfirmRestorePreview -> performRestoreLocal(intent.uri)
+            is BackupConfigIntent.ConfirmNetworkRestorePreview -> performRestoreNetwork(intent.name)
             is BackupConfigIntent.ToggleRestorePreviewCategory -> _uiState.update { state ->
                 val dialog = state.activeDialog as? BackupConfigDialog.RestorePreview ?: return@update state
                 val selected = if (intent.category in dialog.selectedCategories) {
@@ -129,6 +130,10 @@ class BackupConfigViewModel(
                     dialog.selectedCategories + intent.category
                 }
                 state.copy(activeDialog = dialog.copy(selectedCategories = selected))
+            }
+            is BackupConfigIntent.SetRestoreBackupPassword -> _uiState.update { state ->
+                val dialog = state.activeDialog as? BackupConfigDialog.RestorePreview ?: return@update state
+                state.copy(activeDialog = dialog.copy(backupPassword = intent.value))
             }
             is BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups(intent.mode)
             is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name, selectedRestoreMode)
@@ -354,6 +359,7 @@ class BackupConfigViewModel(
                             preview = preview,
                             mode = selectedRestoreMode,
                             selectedCategories = preview.categories.keys,
+                            backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
                         )
                     )
                 }
@@ -373,8 +379,9 @@ class BackupConfigViewModel(
     }
 
     private fun performRestoreLocal(uri: String) {
-        val categories = (_uiState.value.activeDialog as? BackupConfigDialog.RestorePreview)
-            ?.selectedCategories.orEmpty()
+        val dialog = _uiState.value.activeDialog as? BackupConfigDialog.RestorePreview
+        val categories = dialog?.selectedCategories.orEmpty()
+        val backupPassword = dialog?.backupPassword.orEmpty()
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -382,6 +389,7 @@ class BackupConfigViewModel(
                     Uri.parse(uri).toString(),
                     selectedRestoreMode,
                     categories,
+                    backupPassword,
                 )
             }
                 .fold(
@@ -424,15 +432,37 @@ class BackupConfigViewModel(
     }
 
     private fun restoreNetwork(name: String, mode: RestoreMode) {
+        selectedRestoreMode = mode
         _uiState.update {
-            it.copy(activeSheet = null, activeDialog = BackupConfigDialog.Loading(R.string.on_restore))
+            it.copy(activeSheet = null, activeDialog = BackupConfigDialog.Loading(R.string.loading))
         }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { webDavBackupUseCase.restore(name, mode) }
-                .fold(
-                    onSuccess = { finishRestoreSuccess() },
-                    onFailure = { finishRestoreFailure(it.localizedMessage, webDav = true) },
-                )
+            runCatching { webDavBackupUseCase.preview(name) }.fold(
+                onSuccess = { preview -> withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            activeDialog = BackupConfigDialog.RestorePreview(
+                                uri = "",
+                                preview = preview,
+                                mode = selectedRestoreMode,
+                                networkName = name,
+                                selectedCategories = preview.categories.keys,
+                                backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
+                            )
+                        )
+                    }
+                } },
+                onFailure = { finishRestoreFailure(it.localizedMessage, webDav = true) },
+            )
+        }
+    }
+
+    private fun performRestoreNetwork(name: String) {
+        val password = (_uiState.value.activeDialog as? BackupConfigDialog.RestorePreview)?.backupPassword.orEmpty()
+        _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { webDavBackupUseCase.restore(name, selectedRestoreMode, password) }
+                .fold(onSuccess = { finishRestoreSuccess() }, onFailure = { finishRestoreFailure(it.localizedMessage, webDav = true) })
         }
     }
 

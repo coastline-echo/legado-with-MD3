@@ -2,9 +2,10 @@ package io.legado.app.help.storage
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import io.legado.app.domain.model.BackupRestoreStage
 
 data class BackupRestoreProgress(
-    val stage: String,
+    val stage: BackupRestoreStage,
     val current: Int = 0,
     val total: Int = 0,
     val warnings: Int = 0,

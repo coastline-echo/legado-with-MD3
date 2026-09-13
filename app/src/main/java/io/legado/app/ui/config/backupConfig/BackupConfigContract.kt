@@ -62,6 +62,8 @@ sealed interface BackupConfigDialog {
         val uri: String,
         val preview: io.legado.app.domain.model.RestorePreview,
         val mode: RestoreMode,
+        val networkName: String? = null,
+        val backupPassword: String = "",
         val selectedCategories: Set<String> = emptySet(),
     ) : BackupConfigDialog
     data class Loading(
@@ -112,7 +114,9 @@ sealed interface BackupConfigIntent {
     data class RequestLocalRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreLocal(val uri: String) : BackupConfigIntent
     data class ConfirmRestorePreview(val uri: String) : BackupConfigIntent
+    data class ConfirmNetworkRestorePreview(val name: String) : BackupConfigIntent
     data class ToggleRestorePreviewCategory(val category: String) : BackupConfigIntent
+    data class SetRestoreBackupPassword(val value: String) : BackupConfigIntent
     data class RequestNetworkRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreNetwork(val name: String, val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data object ConfirmLocalRestoreFallback : BackupConfigIntent

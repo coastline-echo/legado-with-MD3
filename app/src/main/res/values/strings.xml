@@ -216,6 +216,17 @@
     <string name="backup_sensitive_expand">Expand to view items</string>
     <string name="backup_sensitive_collapse">Collapse items</string>
     <string name="backup_restore_progress_summary">Processed: %1$d/%2$d\nWarnings: %3$d\nFailures: %4$d</string>
+    <string name="backup_stage_prepare">Preparing data</string>
+    <string name="backup_stage_database">Exporting database</string>
+    <string name="backup_stage_resources">Processing resources</string>
+    <string name="backup_stage_manifest">Generating manifest</string>
+    <string name="backup_stage_zip">Generating ZIP</string>
+    <string name="backup_stage_webdav">Uploading WebDAV</string>
+    <string name="restore_stage_read">Reading backup</string>
+    <string name="restore_stage_bookshelf">Restoring bookshelf</string>
+    <string name="restore_stage_resources">Restoring resources</string>
+    <string name="restore_stage_complete">Completed</string>
+    <string name="backup_stage_local">Writing local backup</string><string name="restore_stage_config">Restoring configuration</string><string name="restore_stage_refresh">Refreshing runtime</string>
     <string name="backup_password">Backup password (optional)</string>
     <string name="backup_password_weak_warning">Empty password is allowed, but sensitive information has weak protection.</string>
     <string name="backup_fail">Backup failed\n%s</string>

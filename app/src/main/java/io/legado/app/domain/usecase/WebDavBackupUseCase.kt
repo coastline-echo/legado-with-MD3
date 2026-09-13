@@ -3,6 +3,7 @@ package io.legado.app.domain.usecase
 import io.legado.app.domain.gateway.WebDavBackupGateway
 import io.legado.app.domain.model.WebDavBackup
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 
 class WebDavBackupUseCase(
     private val webDavBackupGateway: WebDavBackupGateway
@@ -40,8 +41,13 @@ class WebDavBackupUseCase(
         webDavBackupGateway.restore(name)
     }
 
-    suspend fun restore(name: String, mode: RestoreMode) {
+    suspend fun restore(name: String, mode: RestoreMode, backupPassword: String? = null) {
         webDavBackupGateway.syncConfig()
-        webDavBackupGateway.restore(name, mode)
+        webDavBackupGateway.restore(name, mode, backupPassword)
+    }
+
+    suspend fun preview(name: String): RestorePreview {
+        webDavBackupGateway.syncConfig()
+        return webDavBackupGateway.preview(name)
     }
 }

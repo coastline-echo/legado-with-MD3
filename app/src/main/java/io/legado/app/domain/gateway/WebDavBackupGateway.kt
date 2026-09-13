@@ -1,6 +1,7 @@
 package io.legado.app.domain.gateway
 
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 
 import io.legado.app.domain.model.WebDavBackup
 
@@ -13,5 +14,6 @@ interface WebDavBackupGateway {
     suspend fun getBackupNames(): List<String>
     suspend fun getLatestBackup(): WebDavBackup?
     suspend fun restore(name: String)
-    suspend fun restore(name: String, mode: RestoreMode) = restore(name)
+    suspend fun restore(name: String, mode: RestoreMode, backupPassword: String? = null) = restore(name)
+    suspend fun preview(name: String): RestorePreview
 }
