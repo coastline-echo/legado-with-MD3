@@ -193,6 +193,15 @@
     <string name="restore_confirmation">Restore confirmation</string>
     <string name="restore_message">Restoring the bookshelf data will overwrite the current Bookshelf.</string>
     <string name="backup_success">Backup succeed</string>
+    <string name="backup_directory_not_selected">No backup directory selected. Backup cancelled.</string>
+    <string name="restore_from_local_use_backup">Use backup content (local)</string>
+    <string name="restore_from_local_keep_application">Keep app content (local)</string>
+    <string name="restore_from_network_use_backup">Use backup content (WebDAV)</string>
+    <string name="restore_from_network_keep_application">Keep app content (WebDAV)</string>
+    <string name="restore_from_local_by_category">Choose by category (local)</string>
+    <string name="restore_from_network_by_category">Choose by category (WebDAV)</string>
+    <string name="restore_preview">Restore preview</string>
+    <string name="restore_preview_summary">Files: %1$d\nResources: %2$d\nWarnings: %3$d</string>
     <string name="backup_fail">Backup failed\n%s</string>
     <string name="on_restore">Restoring</string>
     <string name="restore_success">Restore succeed</string>

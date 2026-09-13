@@ -2,6 +2,7 @@ package io.legado.app.data.repository
 
 import io.legado.app.domain.gateway.WebDavBackupGateway
 import io.legado.app.domain.model.WebDavBackup
+import io.legado.app.domain.model.RestoreMode
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.storage.Backup
 import kotlinx.coroutines.Dispatchers.IO
@@ -51,6 +52,12 @@ class WebDavBackupRepository : WebDavBackupGateway {
     override suspend fun restore(name: String) {
         withContext(IO) {
             AppWebDav.restoreWebDav(name)
+        }
+    }
+
+    override suspend fun restore(name: String, mode: RestoreMode) {
+        withContext(IO) {
+            AppWebDav.restoreWebDav(name, mode)
         }
     }
 }

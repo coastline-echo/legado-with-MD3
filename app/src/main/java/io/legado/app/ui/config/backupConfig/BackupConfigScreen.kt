@@ -1,5 +1,6 @@
 package io.legado.app.ui.config.backupConfig
 
+import android.annotation.SuppressLint
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.help.storage.ImportOldData
+import io.legado.app.domain.model.RestoreMode
 import io.legado.app.lib.permission.Permissions
 import io.legado.app.lib.permission.PermissionsCompat
 import io.legado.app.ui.theme.LegadoTheme
@@ -69,6 +71,7 @@ import kotlinx.coroutines.flow.collectLatest
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
+@SuppressLint("LocalContextGetResourceValueCall")
 fun BackupConfigRouteScreen(
     onBackClick: () -> Unit,
     viewModel: BackupConfigViewModel = koinViewModel(),
@@ -79,7 +82,10 @@ fun BackupConfigRouteScreen(
     val selectBackupPathLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
+        if (uri == null) {
+            viewModel.onIntent(BackupConfigIntent.BackupDirectorySelectionCancelled)
+            return@rememberLauncherForActivityResult
+        }
         uri.takePersistablePermissionSafely(context)
         val path = if (uri.isContentScheme()) uri.toString() else uri.path.orEmpty()
         viewModel.onIntent(BackupConfigIntent.BackupDirectorySelected(path, runBackup = false))
@@ -87,7 +93,10 @@ fun BackupConfigRouteScreen(
     val backupAndSelectLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
+        if (uri == null) {
+            viewModel.onIntent(BackupConfigIntent.BackupDirectorySelectionCancelled)
+            return@rememberLauncherForActivityResult
+        }
         uri.takePersistablePermissionSafely(context)
         val path = if (uri.isContentScheme()) uri.toString() else uri.path.orEmpty()
         viewModel.onIntent(BackupConfigIntent.BackupDirectorySelected(path, runBackup = true))
@@ -96,7 +105,7 @@ fun BackupConfigRouteScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let { viewModel.onIntent(BackupConfigIntent.RestoreLocal(it.toString())) } }
     val importOldLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
+        ActivityResultContracts.OpenDocumentTree()
     ) { uri -> uri?.let { ImportOldData.importUri(context, it) } }
 
     LaunchedEffect(Unit) {
@@ -107,7 +116,9 @@ fun BackupConfigRouteScreen(
                     backupAndSelectLauncher.launch(null)
                 BackupConfigEffect.LaunchRestoreFilePicker ->
                     restoreFileLauncher.launch(arrayOf("application/zip"))
-                BackupConfigEffect.LaunchImportOldDataPicker -> importOldLauncher.launch(arrayOf("*/*"))
+                BackupConfigEffect.LaunchImportOldDataPicker -> importOldLauncher.launch(null)
+                BackupConfigEffect.BackupDirectorySelectionCancelled ->
+                    snackbarHostState.showSnackbar(context.getString(R.string.backup_directory_not_selected))
                 is BackupConfigEffect.RequestStoragePermission -> {
                     PermissionsCompat.Builder()
                         .addPermissions(*Permissions.Group.STORAGE)
@@ -306,8 +317,8 @@ private fun BackupConfigSheets(
     RestoreOptionSheet(
         show = state.activeSheet == BackupConfigSheet.RestoreOptions,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissSheet) },
-        onRestoreFromLocal = { onIntent(BackupConfigIntent.RequestLocalRestore) },
-        onRestoreFromNetwork = { onIntent(BackupConfigIntent.RequestNetworkRestore) },
+        onRestoreFromLocal = { mode -> onIntent(BackupConfigIntent.RequestLocalRestore(mode)) },
+        onRestoreFromNetwork = { mode -> onIntent(BackupConfigIntent.RequestNetworkRestore(mode)) },
     )
     AppModalBottomSheet(
         show = state.activeSheet == BackupConfigSheet.RestoreFiles && state.backupNames.isNotEmpty(),
@@ -520,6 +531,25 @@ private fun BackupConfigDialogs(
         show = loading != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
         title = loading?.let { stringResource(it.titleRes) }.orEmpty(),
+    )
+
+    val preview = dialog as? BackupConfigDialog.RestorePreview
+    AppAlertDialog(
+        show = preview != null,
+        onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
+        title = stringResource(R.string.restore_preview),
+        text = preview?.let {
+            stringResource(
+                R.string.restore_preview_summary,
+                it.preview.fileCount,
+                it.preview.resourceCount,
+                it.preview.warnings.size,
+            )
+        }.orEmpty(),
+        confirmText = stringResource(R.string.restore),
+        onConfirm = { preview?.let { onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri)) } },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = { onIntent(BackupConfigIntent.DismissDialog) },
     )
 }
 

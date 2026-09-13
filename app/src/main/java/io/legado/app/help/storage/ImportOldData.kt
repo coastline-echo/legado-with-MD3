@@ -27,7 +27,10 @@ object ImportOldData {
 
     fun importUri(context: Context, uri: Uri) {
         if (uri.isContentScheme()) {
-            DocumentFile.fromTreeUri(context, uri)?.listFiles()?.forEach { doc ->
+            val documents = DocumentFile.fromTreeUri(context, uri)?.listFiles()?.toList()
+                ?: DocumentFile.fromSingleUri(context, uri)?.let(::listOf)
+                ?: emptyList()
+            documents.forEach { doc ->
                 when (doc.name) {
                     "myBookShelf.json" ->
                         kotlin.runCatching {
@@ -62,8 +65,8 @@ object ImportOldData {
             uri.path?.let { path ->
                 val file = File(path)
                 kotlin.runCatching {// 导入书架
-                    val shelfFile =
-                        FileUtils.createFileIfNotExist(file, "myBookShelf.json")
+                    val shelfFile = if (file.isDirectory) file.getFile("myBookShelf.json") else file
+                    if (!shelfFile.isFile) throw NoStackTraceException("未找到旧版书架文件")
                     val json = shelfFile.readText()
                     val importCount = importOldBookshelf(json)
                     context.toastOnUi("成功导入书架${importCount}")
@@ -72,8 +75,8 @@ object ImportOldData {
                 }
 
                 kotlin.runCatching {// Book source
-                    val sourceFile =
-                        file.getFile("myBookSource.json")
+                    val sourceFile = if (file.isDirectory) file.getFile("myBookSource.json") else null
+                    if (sourceFile == null || !sourceFile.isFile) throw NoStackTraceException("未找到旧版书源文件")
                     val json = sourceFile.readText()
                     val importCount = importOldSource(json)
                     context.toastOnUi("成功导入书源${importCount}")
@@ -99,21 +102,18 @@ object ImportOldData {
 
     private fun importOldBookshelf(json: String): Int {
         val books = fromOldBooks(json)
-        appDb.bookDao.insert(*books.toTypedArray())
-        return books.size
+        return books.count { book -> kotlin.runCatching { appDb.bookDao.insert(book) }.isSuccess }
     }
 
     fun importOldSource(json: String): Int {
         val sources = fromOldBookSources(json)
-        appDb.bookSourceDao.insert(*sources.toTypedArray())
-        return sources.size
+        return sources.count { source -> kotlin.runCatching { appDb.bookSourceDao.insert(source) }.isSuccess }
     }
 
     private fun importOldReplaceRule(json: String): Int {
         val rules = ReplaceAnalyzer.jsonToReplaceRules(json).getOrNull()
         rules?.let {
-            appDb.replaceRuleDao.insert(*rules.toTypedArray())
-            return rules.size
+            return rules.count { rule -> kotlin.runCatching { appDb.replaceRuleDao.insert(rule) }.isSuccess }
         }
         return 0
     }

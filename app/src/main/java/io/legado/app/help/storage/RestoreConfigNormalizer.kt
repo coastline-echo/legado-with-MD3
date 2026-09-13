@@ -27,7 +27,8 @@ internal fun normalizeConfigMap(
 
             else -> when (value) {
                 is Double -> finalMap[key] = value.toFloat()
-                is Int, is Boolean, is Long, is Float, is String -> finalMap[key] = value
+                is Int, is Boolean, is Long, is Float, is String,
+                is Set<*> -> finalMap[key] = value
             }
         }
     }

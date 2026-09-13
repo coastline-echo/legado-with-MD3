@@ -123,6 +123,15 @@
     <string name="restore_confirmation">確認還原嗎？</string>
     <string name="restore_message">還原成功會覆蓋原有書架。</string>
     <string name="backup_success">備份成功</string>
+    <string name="backup_directory_not_selected">未選擇備份目錄，備份已取消</string>
+    <string name="restore_from_local_use_backup">使用備份內容（本機）</string>
+    <string name="restore_from_local_keep_application">保留應用程式內容（本機）</string>
+    <string name="restore_from_network_use_backup">使用備份內容（WebDAV）</string>
+    <string name="restore_from_network_keep_application">保留應用程式內容（WebDAV）</string>
+    <string name="restore_from_local_by_category">按類別選擇（本機）</string>
+    <string name="restore_from_network_by_category">按類別選擇（WebDAV）</string>
+    <string name="restore_preview">還原預覽</string>
+    <string name="restore_preview_summary">檔案：%1$d\n資源：%2$d\n警告：%3$d</string>
     <string name="backup_fail">備份失敗\n%s</string>
     <string name="on_restore">正在還原</string>
     <string name="restore_success">還原成功</string>

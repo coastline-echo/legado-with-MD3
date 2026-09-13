@@ -12,6 +12,7 @@ import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
 import io.legado.app.help.storage.Restore
+import io.legado.app.domain.model.RestoreMode
 import io.legado.app.lib.webdav.Authorization
 import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
@@ -137,14 +138,18 @@ object AppWebDav {
     }
 
     @Throws(WebDavException::class)
-    suspend fun restoreWebDav(name: String) {
+    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
         authorization?.let {
             val webDav = WebDav(rootWebDavUrl + name, it)
             BackupRestoreLock.withLock {
                 webDav.downloadTo(Backup.zipFilePath, true)
                 FileUtils.delete(Backup.backupPath)
                 ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
-                Restore.restoreUnzipped(Backup.backupPath)
+                // 旧版 WebDAV 将背景图放在独立目录；新格式优先使用 ZIP 内资源。
+                if (!File(Backup.backupPath, "manifest.json").isFile) {
+                    downloadLegacyBackgrounds(File(Backup.backupPath, "assets/background"))
+                }
+                Restore.restoreUnzipped(Backup.backupPath, mode)
                 LocalConfig.lastBackup = System.currentTimeMillis()
             }
         }
@@ -254,6 +259,20 @@ object AppWebDav {
         val bgWebDavFiles = getAllBgWebDavFiles().getOrThrow()
             .map { it.displayName }
             .toSet()
+    }
+
+    private suspend fun downloadLegacyBackgrounds(targetDir: File) {
+        val auth = authorization ?: return
+        if (!NetworkUtils.isAvailable()) return
+        targetDir.mkdirs()
+        getAllBgWebDavFiles().getOrNull()?.forEach { remote ->
+            val name = remote.displayName
+            runCatching {
+                WebDav("$bgWebDavUrl$name", auth).downloadTo(File(targetDir, name).absolutePath, true)
+            }.onFailure { error ->
+                AppLog.put("下载旧版背景失败：$name\n${error.localizedMessage}", error)
+            }
+        }
     }
 
     @Suppress("unused")

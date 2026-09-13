@@ -3,6 +3,8 @@ package io.legado.app.ui.config.backupConfig
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Stable
 import io.legado.app.domain.model.settings.BackupSettings
+import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -43,6 +45,7 @@ sealed interface BackupConfigDialog {
     ) : BackupConfigDialog
 
     data class ConfirmLocalRestoreFallback(val error: String?) : BackupConfigDialog
+    data class RestorePreview(val uri: String, val preview: io.legado.app.domain.model.RestorePreview) : BackupConfigDialog
     data class Loading(@StringRes val titleRes: Int) : BackupConfigDialog
 }
 
@@ -77,12 +80,14 @@ sealed interface BackupConfigIntent {
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent
     data class BackupDirectorySelected(val path: String, val runBackup: Boolean) : BackupConfigIntent
+    data object BackupDirectorySelectionCancelled : BackupConfigIntent
     data class RequestBackup(val mode: String) : BackupConfigIntent
     data class PerformBackup(val path: String, val mode: String) : BackupConfigIntent
-    data object RequestLocalRestore : BackupConfigIntent
+    data class RequestLocalRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreLocal(val uri: String) : BackupConfigIntent
-    data object RequestNetworkRestore : BackupConfigIntent
-    data class RestoreNetwork(val name: String) : BackupConfigIntent
+    data class ConfirmRestorePreview(val uri: String) : BackupConfigIntent
+    data class RequestNetworkRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
+    data class RestoreNetwork(val name: String, val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data object ConfirmLocalRestoreFallback : BackupConfigIntent
     data object RequestImportOldData : BackupConfigIntent
 }
@@ -92,6 +97,7 @@ sealed interface BackupConfigEffect {
     data object LaunchBackupAndRunDirectoryPicker : BackupConfigEffect
     data object LaunchRestoreFilePicker : BackupConfigEffect
     data object LaunchImportOldDataPicker : BackupConfigEffect
+    data object BackupDirectorySelectionCancelled : BackupConfigEffect
     data class RequestStoragePermission(val path: String, val mode: String) : BackupConfigEffect
     data class ShowMessage(@StringRes val messageRes: Int, val argument: String? = null) : BackupConfigEffect
 }

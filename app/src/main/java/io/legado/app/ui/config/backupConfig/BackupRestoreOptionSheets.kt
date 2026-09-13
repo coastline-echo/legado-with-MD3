@@ -10,6 +10,7 @@ import androidx.compose.ui.res.stringResource
 import io.legado.app.R
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionCard
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionSheet
+import io.legado.app.domain.model.RestoreMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,8 +49,8 @@ fun BackupOptionSheet(
 fun RestoreOptionSheet(
     show: Boolean,
     onDismissRequest: () -> Unit,
-    onRestoreFromLocal: () -> Unit,
-    onRestoreFromNetwork: () -> Unit,
+    onRestoreFromLocal: (RestoreMode) -> Unit,
+    onRestoreFromNetwork: (RestoreMode) -> Unit,
 ) {
     OptionSheet(
         show = show,
@@ -58,13 +59,33 @@ fun RestoreOptionSheet(
     ) {
         OptionCard(
             icon = Icons.Default.PhoneAndroid,
-            text = stringResource(R.string.restore_from_local),
-            onClick = onRestoreFromLocal,
+            text = stringResource(R.string.restore_from_local_use_backup),
+            onClick = { onRestoreFromLocal(RestoreMode.USE_BACKUP) },
+        )
+        OptionCard(
+            icon = Icons.Default.PhoneAndroid,
+            text = stringResource(R.string.restore_from_local_keep_application),
+            onClick = { onRestoreFromLocal(RestoreMode.KEEP_APPLICATION) },
+        )
+        OptionCard(
+            icon = Icons.Default.PhoneAndroid,
+            text = stringResource(R.string.restore_from_local_by_category),
+            onClick = { onRestoreFromLocal(RestoreMode.BY_CATEGORY) },
         )
         OptionCard(
             icon = Icons.Default.Cloud,
-            text = stringResource(R.string.restore_from_network),
-            onClick = onRestoreFromNetwork,
+            text = stringResource(R.string.restore_from_network_use_backup),
+            onClick = { onRestoreFromNetwork(RestoreMode.USE_BACKUP) },
+        )
+        OptionCard(
+            icon = Icons.Default.Cloud,
+            text = stringResource(R.string.restore_from_network_keep_application),
+            onClick = { onRestoreFromNetwork(RestoreMode.KEEP_APPLICATION) },
+        )
+        OptionCard(
+            icon = Icons.Default.Cloud,
+            text = stringResource(R.string.restore_from_network_by_category),
+            onClick = { onRestoreFromNetwork(RestoreMode.BY_CATEGORY) },
         )
     }
 }

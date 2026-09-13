@@ -39,6 +39,8 @@ import io.legado.app.data.entities.readRecord.ReadRecordIdentity
 import io.legado.app.data.repository.ReadRecordRepository
 import io.legado.app.domain.gateway.AppLocaleGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
+import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.RestorePreview
 import io.legado.app.ui.book.read.ConfigUpdateAction
 import io.legado.app.ui.book.read.ReadConfigUpdateBus
 import io.legado.app.help.DirectLinkUpload
@@ -59,12 +61,15 @@ import io.legado.app.utils.LogUtils
 import io.legado.app.utils.compress.ZipUtils
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.getPrefString
+import io.legado.app.utils.externalFiles
+import io.legado.app.utils.getFile
 import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.isJsonArray
 import io.legado.app.utils.isUri
 import io.legado.app.utils.openInputStream
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.Dispatchers.Main
+import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.koin.core.component.KoinComponent
@@ -74,6 +79,7 @@ import org.xmlpull.v1.XmlPullParserFactory
 import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
+import java.util.zip.ZipInputStream
 
 /**
  * 恢复
@@ -85,7 +91,42 @@ object Restore : KoinComponent {
     // 恢复时须归一化，否则同一本书会因 deviceId 不同而显示为两条记录。
     private const val LOCAL_READ_RECORD_DEVICE_ID = ""
 
-    suspend fun restore(context: Context, uri: Uri) {
+    /** 只读取 ZIP 结构和 manifest，不触碰应用数据。 */
+    suspend fun preview(context: Context, uri: Uri): RestorePreview = withContext(IO) {
+        val entries = mutableListOf<String>()
+        val manifestBytes = kotlin.runCatching {
+            val input = if (uri.isContentScheme()) {
+                DocumentFile.fromSingleUri(context, uri)?.openInputStream()
+            } else {
+                FileInputStream(File(uri.path!!))
+            } ?: error("无法读取备份文件")
+            ZipInputStream(input).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory) {
+                        entries += entry.name
+                        zip.closeEntry()
+                    }
+                    entry = zip.nextEntry
+                }
+            }
+            entries
+        }.getOrElse {
+            return@withContext RestorePreview(false, 0, 0, emptyMap(), listOf("读取备份失败：${it.localizedMessage}"))
+        }
+        val legacy = "manifest.json" !in manifestBytes
+        RestorePreview(
+            legacyFormat = legacy,
+            fileCount = manifestBytes.count { !it.startsWith("assets/") },
+            resourceCount = manifestBytes.count { it.startsWith("assets/") },
+            categories = manifestBytes.filter { !it.startsWith("assets/") }
+                .groupingBy { if (it.endsWith(".xml")) "settings" else if (it.endsWith(".json")) "data" else "other" }
+                .eachCount(),
+            warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else emptyList(),
+        )
+    }
+
+    suspend fun restore(context: Context, uri: Uri, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
         BackupRestoreLock.withLock {
             LogUtils.d(TAG, "开始恢复备份 uri:$uri")
             val unzipResult = kotlin.runCatching {
@@ -102,7 +143,7 @@ object Restore : KoinComponent {
             }
             if (unzipResult.isSuccess) {
                 kotlin.runCatching {
-                    restoreUnzipped(Backup.backupPath)
+                    restoreUnzipped(Backup.backupPath, mode)
                     LocalConfig.lastBackup = System.currentTimeMillis()
                 }.onFailure {
                     appCtx.toastOnUi("恢复备份出错\n${it.localizedMessage}")
@@ -112,17 +153,21 @@ object Restore : KoinComponent {
         }
     }
 
-    suspend fun restoreLocked(path: String) {
+    suspend fun restoreLocked(path: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
         BackupRestoreLock.withLock {
-            restoreUnzipped(path)
+            restoreUnzipped(path, mode)
         }
     }
 
-    internal suspend fun restoreUnzipped(path: String) {
-        restore(path)
+    internal suspend fun restoreUnzipped(path: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
+        val scan = BackupManifestScanner.scan(File(path))
+        scan.warnings.forEach { warning ->
+            AppLog.put("恢复备份校验警告：$warning")
+        }
+        restore(path, mode)
     }
 
-    private suspend fun restore(path: String) {
+    private suspend fun restore(path: String, mode: RestoreMode) {
         val aes = BackupAES()
         fileToListT<Book>(path, "bookshelf.json")?.let {
             it.forEach { book ->
@@ -166,7 +211,8 @@ object Restore : KoinComponent {
         }
         if (BackupConfig.dbIsNotIgnored("bookGroup")) {
             fileToListT<BookGroup>(path, "bookGroup.json")?.let {
-                appDb.bookGroupDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.bookGroupDao.replaceAll(it)
+                else it.forEach { item -> runCatching { appDb.bookGroupDao.insert(item) } }
             }
         }
         if (BackupConfig.dbIsNotIgnored("bookSource")) {
@@ -257,27 +303,32 @@ object Restore : KoinComponent {
         }
         if (BackupConfig.dbIsNotIgnored("homepageModules")) {
             fileToListT<HomepageModule>(path, "homepageModules.json")?.let {
-                appDb.homepageModuleDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.homepageModuleDao.replaceAll(it)
+                else runCatching { appDb.homepageModuleDao.upsertAll(it) }
             }
         }
         if (BackupConfig.dbIsNotIgnored("homepageCustomSets")) {
             fileToListT<HomepageCustomSet>(path, "homepageCustomSets.json")?.let {
-                appDb.homepageCustomSetDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.homepageCustomSetDao.replaceAll(it)
+                else runCatching { appDb.homepageCustomSetDao.insertAll(it) }
             }
         }
         if (BackupConfig.dbIsNotIgnored("highlightRule")) {
             fileToListT<HighlightRule>(path, "highlightRule.json")?.let {
-                appDb.highlightRuleDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.highlightRuleDao.replaceAll(it)
+                else runCatching { appDb.highlightRuleDao.insertAll(it) }
             }
         }
         if (BackupConfig.dbIsNotIgnored("highlightTagRule")) {
             fileToListT<HighlightTagRule>(path, "highlightTagRule.json")?.let {
-                appDb.highlightTagRuleDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.highlightTagRuleDao.replaceAll(it)
+                else runCatching { appDb.highlightTagRuleDao.insert(*it.toTypedArray()) }
             }
         }
         if (BackupConfig.dbIsNotIgnored("tagGroupRule")) {
             fileToListT<TagGroupRule>(path, "tagGroupRule.json")?.let {
-                appDb.tagGroupRuleDao.replaceAll(it)
+                if (mode == RestoreMode.USE_BACKUP) appDb.tagGroupRuleDao.replaceAll(it)
+                else runCatching { appDb.tagGroupRuleDao.insert(*it.toTypedArray()) }
             }
         }
         if (BackupConfig.dbIsNotIgnored("readRecord")) {
@@ -328,8 +379,11 @@ object Restore : KoinComponent {
             File(path, ThemeConfigStore.configFileName).takeIf {
                 it.exists()
             }?.runCatching {
-                FileUtils.copyFileAtomic(this, ThemeConfigStore.configFilePath)
-                ThemeConfigStore.upConfig()
+                val target = File(ThemeConfigStore.configFilePath)
+                if (mode == RestoreMode.USE_BACKUP || !target.isFile) {
+                    FileUtils.copyFileAtomic(this, ThemeConfigStore.configFilePath)
+                    ThemeConfigStore.upConfig()
+                }
             }?.onFailure {
                 AppLog.put("恢复主题出错\n${it.localizedMessage}", it)
             }
@@ -347,14 +401,20 @@ object Restore : KoinComponent {
             File(path, ReadBookConfig.configFileName).takeIf {
                 it.exists()
             }?.runCatching {
-                FileUtils.copyFileAtomic(this, ReadBookConfig.configFilePath)
+                val target = File(ReadBookConfig.configFilePath)
+                if (mode == RestoreMode.USE_BACKUP || !target.isFile) {
+                    FileUtils.copyFileAtomic(this, ReadBookConfig.configFilePath)
+                }
             }?.onFailure {
                 AppLog.put("恢复阅读界面出错\n${it.localizedMessage}", it)
             }
             File(path, ReadBookConfig.shareConfigFileName).takeIf {
                 it.exists()
             }?.runCatching {
-                FileUtils.copyFileAtomic(this, ReadBookConfig.shareConfigFilePath)
+                val target = File(ReadBookConfig.shareConfigFilePath)
+                if (mode == RestoreMode.USE_BACKUP || !target.isFile) {
+                    FileUtils.copyFileAtomic(this, ReadBookConfig.shareConfigFilePath)
+                }
             }?.onFailure {
                 AppLog.put("恢复阅读界面出错\n${it.localizedMessage}", it)
             }
@@ -379,12 +439,14 @@ object Restore : KoinComponent {
             try {
                 val map = readXmlToMap(configFile)
                 if (map.isNotEmpty()) {
-                    applyConfigMap(map, aes)
+                    applyConfigMap(map, aes, mode)
                 }
             } catch (e: Exception) {
                 AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
             }
         }
+
+        restoreBackgroundResources(path)
 
         appCtx.toastOnUi(R.string.restore_success)
         withContext(Main) {
@@ -419,6 +481,24 @@ object Restore : KoinComponent {
             Environment.MEDIA_UNKNOWN -> LocalBookLocationStatus.Unknown
             null -> LocalBookLocationStatus.Unknown
             else -> LocalBookLocationStatus.Unknown
+        }
+    }
+
+    /** 恢复 ZIP 内按 hash 命名的背景资源；单张图片失败不影响其他类别。 */
+    private fun restoreBackgroundResources(path: String) {
+        val manifest = BackupManifestScanner.scan(File(path)).manifest ?: return
+        val targetDir = appCtx.externalFiles.getFile("bg").apply { mkdirs() }
+        manifest.resources.forEach { resource ->
+            if (!resource.name.startsWith("assets/background/")) return@forEach
+            runCatching {
+                val source = File(path, resource.name)
+                if (!source.isFile) error("资源不存在")
+                if (source.length() != resource.size) error("资源大小不匹配")
+                val target = File(targetDir, source.name)
+                source.copyTo(target, overwrite = true)
+            }.onFailure { error ->
+                AppLog.put("恢复背景图片失败：${resource.name}\n${error.localizedMessage}", error)
+            }
         }
     }
 
@@ -517,7 +597,7 @@ object Restore : KoinComponent {
         }
     }
 
-    private suspend fun applyConfigMap(map: Map<String, Any?>, aes: BackupAES) {
+    private suspend fun applyConfigMap(map: Map<String, Any?>, aes: BackupAES, mode: RestoreMode) {
         val finalMap = normalizeConfigMap(
             map = map,
             keyIsNotIgnore = { BackupConfig.keyIsNotIgnore(it) },
@@ -526,7 +606,13 @@ object Restore : KoinComponent {
                 .isNullOrBlank(),
         )
         // 经快照层批量恢复：立即对读侧生效（onRestoreFinish 的读取不再依赖回灌时机），单次原子 edit 落盘
-        AppConfigStore.putAll(finalMap)
+        val valuesToApply = if (mode == RestoreMode.USE_BACKUP) {
+            finalMap
+        } else {
+            val existingKeys = AppConfigStore.preferences.asMap().keys.map { it.name }.toSet()
+            finalMap.filterKeys { it !in existingKeys }
+        }
+        AppConfigStore.putAll(valuesToApply)
         // 恢复完成提示前等待落盘，dataStore.edit 返回即持久化完成
         SettingsWriter.awaitPendingWrites()
     }
@@ -546,6 +632,19 @@ object Restore : KoinComponent {
                         if (name != null) {
                             when (tagName) {
                                 "string" -> map[name] = parser.nextText()
+                                "set" -> {
+                                    val values = linkedSetOf<String>()
+                                    var nested = parser.next()
+                                    while (nested != XmlPullParser.END_DOCUMENT) {
+                                        if (nested == XmlPullParser.START_TAG && parser.name == "string") {
+                                            values += parser.nextText()
+                                        } else if (nested == XmlPullParser.END_TAG && parser.name == "set") {
+                                            break
+                                        }
+                                        nested = parser.next()
+                                    }
+                                    map[name] = values
+                                }
                                 "int" -> map[name] = parser.getAttributeValue(null, "value").toInt()
                                 "long" -> map[name] = parser.getAttributeValue(null, "value").toLong()
                                 "float" -> map[name] = parser.getAttributeValue(null, "value").toFloat()

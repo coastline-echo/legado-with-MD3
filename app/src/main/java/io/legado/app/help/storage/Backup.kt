@@ -9,6 +9,7 @@ import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
+import io.legado.app.domain.model.BackupSensitiveCategory
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.DirectLinkUpload
@@ -31,6 +32,7 @@ import io.legado.app.utils.normalizeFileName
 import io.legado.app.utils.openOutputStream
 import io.legado.app.utils.outputStream
 import io.legado.app.utils.writeToOutputStream
+import io.legado.app.BuildConfig
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -40,6 +42,7 @@ import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -93,7 +96,8 @@ object Backup {
             ReadBookConfig.shareConfigFileName,
             ThemeConfigStore.configFileName,
             BookCover.configFileName,
-            "config.xml"
+            "config.xml",
+            "manifest.json"
         )
     }
 
@@ -252,33 +256,87 @@ object Backup {
         currentCoroutineContext().ensureActive()
         val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
+        val writtenConfigKeys = mutableSetOf<String>()
+        val ignoredConfigKeys = mutableSetOf<String>()
+        val unsupportedConfigKeys = mutableSetOf<String>()
         val xmlBuilder = StringBuilder()
         xmlBuilder.append("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n")
         xmlBuilder.append("<map>\n")
         configMap.forEach { (key, value) ->
             if (BackupConfig.keyIsNotIgnore(key, true)) {
                 val finalValue = if (key == PreferKey.webDavPassword) {
-                    aes.runCatching { encryptBase64(value.toString()) }.getOrDefault(value.toString())
+                    aes.runCatching { encryptBase64(value.toString()) }.getOrElse {
+                        AppLog.put("备份配置加密失败，已跳过敏感键：$key", it)
+                        return@forEach
+                    }
                 } else value
 
                 when (finalValue) {
-                    is String -> xmlBuilder.append("    <string name=\"$key\">${finalValue.replace("&", "&amp;").replace("<", "&lt;")}</string>\n")
-                    is Int -> xmlBuilder.append("    <int name=\"$key\" value=\"$finalValue\" />\n")
-                    is Long -> xmlBuilder.append("    <long name=\"$key\" value=\"$finalValue\" />\n")
-                    is Float -> xmlBuilder.append("    <float name=\"$key\" value=\"$finalValue\" />\n")
-                    is Boolean -> xmlBuilder.append("    <boolean name=\"$key\" value=\"$finalValue\" />\n")
+                    is String -> {
+                        writtenConfigKeys += key
+                        xmlBuilder.append("    <string name=\"$key\">${finalValue.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")}</string>\n")
+                    }
+                    is Set<*> -> {
+                        val values = finalValue.filterIsInstance<String>()
+                        writtenConfigKeys += key
+                        xmlBuilder.append("    <set name=\"$key\">\n")
+                        values.forEach { item ->
+                            xmlBuilder.append("        <string>${item.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")}</string>\n")
+                        }
+                        xmlBuilder.append("    </set>\n")
+                    }
+                    is Int -> { writtenConfigKeys += key; xmlBuilder.append("    <int name=\"$key\" value=\"$finalValue\" />\n") }
+                    is Long -> { writtenConfigKeys += key; xmlBuilder.append("    <long name=\"$key\" value=\"$finalValue\" />\n") }
+                    is Float -> { writtenConfigKeys += key; xmlBuilder.append("    <float name=\"$key\" value=\"$finalValue\" />\n") }
+                    is Boolean -> { writtenConfigKeys += key; xmlBuilder.append("    <boolean name=\"$key\" value=\"$finalValue\" />\n") }
+                    else -> {
+                        unsupportedConfigKeys += key
+                        AppLog.put("备份配置类型不支持，已跳过：$key (${finalValue::class.java.simpleName})")
+                    }
                 }
-            }
+            } else ignoredConfigKeys += key
         }
         xmlBuilder.append("</map>")
         FileUtils.createFileIfNotExist(backupPath + File.separator + "config.xml")
             .writeText(xmlBuilder.toString())
+
+        val resourceFiles = copyBackgroundResources(backupPath)
+
+        val filesForManifest = backupFileNames
+            .filter { it != "manifest.json" }
+            .map { File(backupPath, it) }
+            .filter(File::isFile)
+        val manifest = BackupManifestBuilder.build(
+            root = File(backupPath),
+            files = filesForManifest,
+            categories = filesForManifest.groupBy { manifestCategory(it.name) }
+                .mapValues { (_, files) -> files.map(File::getName) },
+            ignoredCategories = BackupConfig.backupIgnoreConfig.filterValues { it }.keys,
+            configKeys = writtenConfigKeys,
+            ignoredConfigKeys = ignoredConfigKeys,
+            unsupportedConfigKeys = unsupportedConfigKeys,
+            appVersion = BuildConfig.VERSION_NAME,
+            resources = resourceFiles,
+            sensitiveIncluded = filesForManifest.any { it.name == "servers.json" } ||
+                PreferKey.webDavPassword in writtenConfigKeys,
+            sensitiveItems = buildSet {
+                if (filesForManifest.any { it.name == "servers.json" }) {
+                    add(BackupSensitiveCategory.SERVER_CREDENTIALS.name)
+                }
+                if (PreferKey.webDavPassword in writtenConfigKeys) {
+                    add(BackupSensitiveCategory.WEBDAV_CREDENTIALS.name)
+                }
+            },
+        )
+        FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
+            .writeText(GSON.toJson(manifest))
 
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
         val paths = backupFileNames
             .map { File(backupPath, it) }
             .filter(File::isFile)
+            .plus(resourceFiles)
             .map(File::getAbsolutePath)
         FileUtils.delete(zipFilePath)
         FileUtils.delete(zipFilePath.replace("tmp_", ""))
@@ -314,30 +372,53 @@ object Backup {
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
-        readStyleGateway.allBackgroundImagePaths().map {
-            if (it.contains(File.separator)) {
-                File(it)
-            } else {
-                appCtx.externalFiles.getFile("bg", it)
-            }
-        }.let {
-            AppWebDav.upBgs(it.toTypedArray())
+    }
+
+    private fun manifestCategory(fileName: String): String = when (fileName) {
+        "config.xml" -> "settings"
+        "readConfig.json", "shareReadConfig.json" -> "reader"
+        "themeConfig.json" -> "theme"
+        "background.json" -> "resources"
+        else -> "database"
+    }
+
+    /** 将配置引用的背景图片复制进 ZIP，避免依赖设备绝对路径或独立 WebDAV 目录。 */
+    private fun copyBackgroundResources(rootPath: String): List<File> {
+        val targetDir = File(rootPath, "assets/background").apply { mkdirs() }
+        return readStyleGateway.allBackgroundImagePaths().mapNotNull { path ->
+            val source = if (path.contains(File.separator)) File(path) else appCtx.externalFiles.getFile("bg", path)
+            if (!source.isFile) return@mapNotNull null
+            val hash = source.sha256()
+            val extension = source.extension.takeIf { it.isNotBlank() }?.let { ".${it.lowercase(Locale.ROOT)}" } ?: ""
+            val target = File(targetDir, "$hash$extension")
+            if (!target.exists()) source.copyTo(target, overwrite = false)
+            target
         }
+    }
+
+    private fun File.sha256(): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var count = input.read(buffer)
+            while (count >= 0) {
+                if (count > 0) digest.update(buffer, 0, count)
+                count = input.read(buffer)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private suspend fun writeListToJson(list: List<Any>, fileName: String, path: String) {
         currentCoroutineContext().ensureActive()
         withContext(IO) {
-            if (list.isNotEmpty()) {
-                LogUtils.d(TAG, "阅读备份 $fileName 列表大小 ${list.size}")
-                val file = FileUtils.createFileIfNotExist(path + File.separator + fileName)
-                file.outputStream().buffered().use {
-                    GSON.writeToOutputStream(it, list)
-                }
-                LogUtils.d(TAG, "阅读备份 $fileName 写入大小 ${file.length()}")
-            } else {
-                LogUtils.d(TAG, "阅读备份 $fileName 列表为空")
+            LogUtils.d(TAG, "阅读备份 $fileName 列表大小 ${list.size}")
+            // 空列表也必须写入，恢复时才能区分“明确为空”和“备份未包含此类别”。
+            val file = FileUtils.createFileIfNotExist(path + File.separator + fileName)
+            file.outputStream().buffered().use {
+                GSON.writeToOutputStream(it, list)
             }
+            LogUtils.d(TAG, "阅读备份 $fileName 写入大小 ${file.length()}")
         }
     }
 

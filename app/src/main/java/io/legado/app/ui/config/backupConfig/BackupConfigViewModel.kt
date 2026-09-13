@@ -8,6 +8,7 @@ import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.domain.model.settings.BackupSettings
 import io.legado.app.domain.usecase.BackupRestoreUseCase
 import io.legado.app.domain.usecase.WebDavBackupUseCase
+import io.legado.app.domain.model.RestoreMode
 import io.legado.app.utils.isContentScheme
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
@@ -95,13 +96,16 @@ class BackupConfigViewModel(
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
             is BackupConfigIntent.BackupDirectorySelected -> saveBackupPath(intent.path, intent.runBackup)
+            BackupConfigIntent.BackupDirectorySelectionCancelled ->
+                _effects.tryEmit(BackupConfigEffect.ShowMessage(R.string.backup_directory_not_selected))
             is BackupConfigIntent.RequestBackup -> requestBackup(intent.mode)
             is BackupConfigIntent.PerformBackup -> performBackup(intent.path, intent.mode)
-            BackupConfigIntent.RequestLocalRestore -> requestLocalRestore()
+            is BackupConfigIntent.RequestLocalRestore -> requestLocalRestore(intent.mode)
             is BackupConfigIntent.RestoreLocal -> restoreLocal(intent.uri)
-            BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups()
-            is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name)
-            BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore()
+            is BackupConfigIntent.ConfirmRestorePreview -> performRestoreLocal(intent.uri)
+            is BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups(intent.mode)
+            is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name, selectedRestoreMode)
+            BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore(RestoreMode.KEEP_APPLICATION)
             BackupConfigIntent.RequestImportOldData ->
                 _effects.tryEmit(BackupConfigEffect.LaunchImportOldDataPicker)
         }
@@ -262,7 +266,10 @@ class BackupConfigViewModel(
     private fun requestBackup(mode: String, selectedPath: String? = null) {
         _uiState.update { it.copy(activeSheet = null) }
         val path = selectedPath ?: _uiState.value.settings.backupPath.orEmpty()
-        if (path.isEmpty() && mode != "webdav") return
+        if (path.isEmpty() && mode != "webdav") {
+            _effects.tryEmit(BackupConfigEffect.LaunchBackupAndRunDirectoryPicker)
+            return
+        }
         if (path.isNotEmpty() && !path.isContentScheme()) {
             _effects.tryEmit(BackupConfigEffect.RequestStoragePermission(path, mode))
         } else {
@@ -291,7 +298,10 @@ class BackupConfigViewModel(
         }
     }
 
-    private fun requestLocalRestore() {
+    private var selectedRestoreMode = RestoreMode.KEEP_APPLICATION
+
+    private fun requestLocalRestore(mode: RestoreMode) {
+        selectedRestoreMode = mode
         _uiState.update { it.copy(activeSheet = null, activeDialog = null) }
         _effects.tryEmit(BackupConfigEffect.LaunchRestoreFilePicker)
     }
@@ -299,7 +309,17 @@ class BackupConfigViewModel(
     private fun restoreLocal(uri: String) {
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { backupRestoreUseCase.restoreLocal(Uri.parse(uri).toString()) }
+            val preview = backupRestoreUseCase.previewLocal(Uri.parse(uri).toString())
+            withContext(Dispatchers.Main) {
+                _uiState.update { it.copy(activeDialog = BackupConfigDialog.RestorePreview(uri, preview)) }
+            }
+        }
+    }
+
+    private fun performRestoreLocal(uri: String) {
+        _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { backupRestoreUseCase.restoreLocal(Uri.parse(uri).toString(), selectedRestoreMode) }
                 .fold(
                     onSuccess = { finishRestoreSuccess() },
                     onFailure = { finishRestoreFailure(it.localizedMessage) },
@@ -307,7 +327,8 @@ class BackupConfigViewModel(
         }
     }
 
-    private fun loadNetworkBackups() {
+    private fun loadNetworkBackups(mode: RestoreMode) {
+        selectedRestoreMode = mode
         _uiState.update {
             it.copy(activeSheet = null, activeDialog = BackupConfigDialog.Loading(R.string.loading))
         }
@@ -338,12 +359,12 @@ class BackupConfigViewModel(
         }
     }
 
-    private fun restoreNetwork(name: String) {
+    private fun restoreNetwork(name: String, mode: RestoreMode) {
         _uiState.update {
             it.copy(activeSheet = null, activeDialog = BackupConfigDialog.Loading(R.string.on_restore))
         }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { webDavBackupUseCase.restore(name) }
+            runCatching { webDavBackupUseCase.restore(name, mode) }
                 .fold(
                     onSuccess = { finishRestoreSuccess() },
                     onFailure = { finishRestoreFailure(it.localizedMessage, webDav = true) },
