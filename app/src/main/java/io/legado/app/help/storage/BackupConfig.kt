@@ -31,6 +31,12 @@ internal val alwaysIgnoredPreferenceKeys = setOf(
 @Suppress("ConstPropertyName")
 object BackupConfig {
 
+    var backupPassword: String?
+        get() = io.legado.app.help.config.LocalConfig.backupPassword
+        set(value) {
+            io.legado.app.help.config.LocalConfig.backupPassword = value
+        }
+
     private val sensitiveSelectionPath = FileUtils.getPath(appCtx.filesDir, "backupSensitiveSelection.json")
     private var sensitiveSelectionValue: BackupSensitiveSelection? = null
     val sensitiveSelection: BackupSensitiveSelection

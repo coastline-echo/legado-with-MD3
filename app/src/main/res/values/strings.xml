@@ -215,6 +215,9 @@
     <string name="backup_sensitive_other">Other sensitive fields</string>
     <string name="backup_sensitive_expand">Expand to view items</string>
     <string name="backup_sensitive_collapse">Collapse items</string>
+    <string name="backup_restore_progress_summary">Processed: %1$d/%2$d\nWarnings: %3$d\nFailures: %4$d</string>
+    <string name="backup_password">Backup password (optional)</string>
+    <string name="backup_password_weak_warning">Empty password is allowed, but sensitive information has weak protection.</string>
     <string name="backup_fail">Backup failed\n%s</string>
     <string name="on_restore">Restoring</string>
     <string name="restore_success">Restore succeed</string>

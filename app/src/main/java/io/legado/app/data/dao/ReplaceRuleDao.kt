@@ -160,6 +160,9 @@ interface ReplaceRuleDao {
     @Delete
     fun delete(vararg replaceRules: ReplaceRule)
 
+    @Query("delete from replace_rules")
+    fun deleteAll()
+
     @Transaction
     suspend fun updateAllOrders(rules: List<ReplaceRule>) {
         rules.forEachIndexed { index, rule ->

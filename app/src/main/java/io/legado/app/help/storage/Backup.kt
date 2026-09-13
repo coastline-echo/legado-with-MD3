@@ -23,7 +23,6 @@ import io.legado.app.model.BookCover
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.LogUtils
-import io.legado.app.utils.compress.ZipUtils
 import io.legado.app.utils.createFolderIfNotExist
 import io.legado.app.utils.externalFiles
 import io.legado.app.utils.getFile
@@ -42,7 +41,10 @@ import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.BufferedInputStream
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -349,6 +351,9 @@ object Backup {
                     add(BackupSensitiveCategory.WEBDAV_CREDENTIALS.name)
                 }
             },
+            weakProtection = BackupPasswordPolicyResolver.resolve(
+                LocalConfig.backupPassword ?: LocalConfig.password
+            ).weakProtection,
         )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
             .writeText(GSON.toJson(manifest))
@@ -356,11 +361,6 @@ object Backup {
 
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
-        val paths = backupFileNames
-            .map { File(backupPath, it) }
-            .filter(File::isFile)
-            .plus(resourceFiles)
-            .map(File::getAbsolutePath)
         FileUtils.delete(zipFilePath)
         FileUtils.delete(zipFilePath.replace("tmp_", ""))
         val backupFileName = if (backupSettingsGateway.currentSettings.onlyLatestBackup) {
@@ -368,7 +368,7 @@ object Backup {
         } else {
             zipFileName
         }
-        if (ZipUtils.zipFiles(paths, zipFilePath)) {
+        if (zipBackupDirectory(File(backupPath), File(zipFilePath))) {
             BackupRestoreProgressBus.emit(BackupRestoreProgress("生成 ZIP"))
             if (mode == "both" || mode == "local") {
                 when {
@@ -407,6 +407,21 @@ object Backup {
         "background.json" -> "resources"
         else -> "database"
     }
+
+    /** 按备份根目录保留相对路径，确保 assets 等嵌套资源与 manifest 一致。 */
+    private fun zipBackupDirectory(root: File, target: File): Boolean = runCatching {
+        val rootPath = root.canonicalFile.toPath()
+        ZipOutputStream(FileOutputStream(target)).use { output ->
+            root.walkTopDown().filter(File::isFile).forEach { file ->
+                val name = rootPath.relativize(file.canonicalFile.toPath()).toString()
+                    .replace(File.separatorChar, '/')
+                output.putNextEntry(ZipEntry(name))
+                BufferedInputStream(FileInputStream(file)).use { input -> input.copyTo(output) }
+                output.closeEntry()
+            }
+        }
+        true
+    }.getOrDefault(false)
 
     private fun sanitizeBookSource(source: io.legado.app.data.entities.BookSource) = source.copy(
         header = source.header.takeIf {

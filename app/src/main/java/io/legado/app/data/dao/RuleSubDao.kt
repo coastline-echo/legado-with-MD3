@@ -25,6 +25,9 @@ interface RuleSubDao {
     @Delete
     fun delete(vararg ruleSub: RuleSub)
 
+    @Query("delete from ruleSubs")
+    fun deleteAll()
+
     @Update
     fun update(vararg ruleSub: RuleSub)
 }

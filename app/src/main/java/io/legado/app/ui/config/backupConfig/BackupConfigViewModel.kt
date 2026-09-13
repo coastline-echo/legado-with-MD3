@@ -10,6 +10,7 @@ import io.legado.app.domain.usecase.BackupRestoreUseCase
 import io.legado.app.domain.usecase.WebDavBackupUseCase
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.BackupSensitiveCategory
+import io.legado.app.help.storage.BackupRestoreProgressBus
 import io.legado.app.utils.isContentScheme
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,7 @@ class BackupConfigViewModel(
             dbIgnoreItems = loadDbIgnoreItems(),
             backupDbIgnoreItems = loadBackupDbIgnoreItems(),
             sensitiveItems = loadSensitiveItems(),
+            backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
         )
     )
     val uiState = _uiState.asStateFlow()
@@ -107,6 +109,7 @@ class BackupConfigViewModel(
                 }.toImmutableList())
             }
             BackupConfigIntent.SaveSensitiveItems -> saveSensitiveItems()
+            is BackupConfigIntent.SetBackupPassword -> _uiState.update { it.copy(backupPassword = intent.value) }
             BackupConfigIntent.DismissDialog -> _uiState.update { it.copy(activeDialog = null) }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
@@ -294,6 +297,15 @@ class BackupConfigViewModel(
             _effects.tryEmit(BackupConfigEffect.LaunchBackupAndRunDirectoryPicker)
             return
         }
+        viewModelScope.launch {
+            BackupRestoreProgressBus.events.collect { progress ->
+                _uiState.update { state ->
+                    val loading = state.activeDialog as? BackupConfigDialog.Loading
+                        ?: return@update state
+                    state.copy(activeDialog = loading.copy(progress = progress))
+                }
+            }
+        }
         if (path.isNotEmpty() && !path.isContentScheme()) {
             _effects.tryEmit(BackupConfigEffect.RequestStoragePermission(path, mode))
         } else {
@@ -352,6 +364,8 @@ class BackupConfigViewModel(
     private fun saveSensitiveItems() {
         val selected = _uiState.value.sensitiveItems.filter { it.checked }
             .map { it.category }.toSet()
+        io.legado.app.help.storage.BackupConfig.backupPassword =
+            _uiState.value.backupPassword.takeIf { it.isNotEmpty() }
         io.legado.app.help.storage.BackupConfig.saveSensitiveSelection(
             io.legado.app.domain.model.BackupSensitiveSelection(selected = selected)
         )

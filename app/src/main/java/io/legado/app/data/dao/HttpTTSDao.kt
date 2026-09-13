@@ -28,6 +28,9 @@ interface HttpTTSDao {
     @Delete
     fun delete(vararg httpTTS: HttpTTS)
 
+    @Query("delete from httpTTS")
+    fun deleteAll()
+
     @Update
     fun update(vararg httpTTS: HttpTTS)
 

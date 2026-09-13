@@ -6,6 +6,7 @@ import io.legado.app.domain.model.settings.BackupSettings
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
 import io.legado.app.domain.model.BackupSensitiveCategory
+import io.legado.app.help.storage.BackupRestoreProgress
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -20,6 +21,7 @@ data class BackupConfigUiState(
     val dbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val backupDbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val sensitiveItems: ImmutableList<BackupSensitiveItem> = persistentListOf(),
+    val backupPassword: String = "",
 )
 
 @Stable
@@ -62,7 +64,10 @@ sealed interface BackupConfigDialog {
         val mode: RestoreMode,
         val selectedCategories: Set<String> = emptySet(),
     ) : BackupConfigDialog
-    data class Loading(@StringRes val titleRes: Int) : BackupConfigDialog
+    data class Loading(
+        @StringRes val titleRes: Int,
+        val progress: BackupRestoreProgress? = null,
+    ) : BackupConfigDialog
 }
 
 sealed interface BackupConfigIntent {
@@ -96,6 +101,7 @@ sealed interface BackupConfigIntent {
     data class ToggleSensitiveItem(val category: BackupSensitiveCategory, val value: Boolean) : BackupConfigIntent
     data class ToggleSensitiveExpanded(val category: BackupSensitiveCategory) : BackupConfigIntent
     data object SaveSensitiveItems : BackupConfigIntent
+    data class SetBackupPassword(val value: String) : BackupConfigIntent
     data object DismissDialog : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent

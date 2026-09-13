@@ -236,12 +236,14 @@ object Restore : KoinComponent {
         if (selected("bookmark") && BackupConfig.dbIsNotIgnored("bookmark")) {
             fileToListT<Bookmark>(path, "bookmark.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.bookmarkDao.deleteAll()
                     appDb.bookmarkDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
             }
             fileToListT<BookMarking>(path, "bookMarking.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.bookMarkingDao.deleteAll()
                     appDb.bookMarkingDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -256,6 +258,7 @@ object Restore : KoinComponent {
         if (selected("bookSource") && BackupConfig.dbIsNotIgnored("bookSource")) {
             fileToListT<BookSource>(path, "bookSource.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.bookSourceDao.deleteAll()
                     appDb.bookSourceDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -270,6 +273,7 @@ object Restore : KoinComponent {
         if (selected("rssSource") && BackupConfig.dbIsNotIgnored("rssSource")) {
             fileToListT<RssSource>(path, "rssSources.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.rssSourceDao.deleteAll()
                     appDb.rssSourceDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -278,6 +282,7 @@ object Restore : KoinComponent {
         if (selected("rssStar") && BackupConfig.dbIsNotIgnored("rssStar")) {
             fileToListT<RssStar>(path, "rssStar.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.rssStarDao.deleteAll()
                     appDb.rssStarDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -286,6 +291,7 @@ object Restore : KoinComponent {
         if (selected("replaceRule") && BackupConfig.dbIsNotIgnored("replaceRule")) {
             fileToListT<ReplaceRule>(path, "replaceRule.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.replaceRuleDao.deleteAll()
                     appDb.replaceRuleDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -294,6 +300,7 @@ object Restore : KoinComponent {
         if (selected("searchHistory") && BackupConfig.dbIsNotIgnored("searchHistory")) {
             fileToListT<SearchKeyword>(path, "searchHistory.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.searchKeywordDao.deleteAll()
                     appDb.searchKeywordDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -302,6 +309,7 @@ object Restore : KoinComponent {
         if (selected("sourceSub") && BackupConfig.dbIsNotIgnored("sourceSub")) {
             fileToListT<RuleSub>(path, "sourceSub.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.ruleSubDao.deleteAll()
                     appDb.ruleSubDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -310,6 +318,7 @@ object Restore : KoinComponent {
         if (selected("txtTocRule") && BackupConfig.dbIsNotIgnored("txtTocRule")) {
             fileToListT<TxtTocRule>(path, "txtTocRule.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.txtTocRuleDao.deleteAll()
                     appDb.txtTocRuleDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -318,6 +327,7 @@ object Restore : KoinComponent {
         if (selected("httpTTS") && BackupConfig.dbIsNotIgnored("httpTTS")) {
             fileToListT<HttpTTS>(path, "httpTTS.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.httpTTSDao.deleteAll()
                     appDb.httpTTSDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -326,6 +336,7 @@ object Restore : KoinComponent {
         if (selected("dictRule") && BackupConfig.dbIsNotIgnored("dictRule")) {
             fileToListT<DictRule>(path, "dictRule.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.dictRuleDao.deleteAll()
                     appDb.dictRuleDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -334,6 +345,7 @@ object Restore : KoinComponent {
         if (selected("keyboardAssists") && BackupConfig.dbIsNotIgnored("keyboardAssists")) {
             fileToListT<KeyboardAssist>(path, "keyboardAssists.json")?.let {
                 try {
+                    if (mode == RestoreMode.USE_BACKUP) appDb.keyboardAssistsDao.deleteAll()
                     appDb.keyboardAssistsDao.insert(*it.toTypedArray())
                 } catch (_: SQLiteConstraintException) {
                 }
@@ -371,6 +383,11 @@ object Restore : KoinComponent {
         }
         if (selected("readRecord") && BackupConfig.dbIsNotIgnored("readRecord")) {
             appDb.withTransaction {
+                if (mode == RestoreMode.USE_BACKUP) {
+                    appDb.readRecordDao.clear()
+                    appDb.readRecordDao.clearDetails()
+                    appDb.readRecordDao.clearSessions()
+                }
                 fileToListT<ReadRecord>(path, "readRecord.json")?.forEach { readRecord ->
                     try { restoreReadRecord(readRecord) } catch (_: SQLiteConstraintException) { }
                 }
@@ -394,8 +411,9 @@ object Restore : KoinComponent {
                 if (!json.isJsonArray()) {
                     json = aes.decryptStr(json)
                 }
-                GSON.fromJsonArray<Server>(json).getOrNull()?.let {
+                    GSON.fromJsonArray<Server>(json).getOrNull()?.let {
                     try {
+                        if (mode == RestoreMode.USE_BACKUP) appDb.serverDao.deleteAll()
                         appDb.serverDao.insert(*it.toTypedArray())
                     } catch (_: SQLiteConstraintException) {
                     }

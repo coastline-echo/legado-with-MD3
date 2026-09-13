@@ -18,6 +18,7 @@ data class BackupManifest(
     val ignoredCategories: Set<String> = emptySet(),
     val sensitiveIncluded: Boolean = false,
     val sensitiveItems: Set<String> = emptySet(),
+    val weakProtection: Boolean = false,
     val legacyFormat: Boolean = false,
 )
 
@@ -47,6 +48,7 @@ object BackupManifestBuilder {
         appVersion: String = "",
         sensitiveIncluded: Boolean = false,
         sensitiveItems: Set<String> = emptySet(),
+        weakProtection: Boolean = false,
     ): BackupManifest {
         val rootPath = root.canonicalFile.toPath()
         val fileEntries = files.mapNotNull { file ->
@@ -79,6 +81,7 @@ object BackupManifestBuilder {
             ignoredCategories = ignoredCategories.toSortedSet(),
             sensitiveIncluded = sensitiveIncluded,
             sensitiveItems = sensitiveItems.toSortedSet(),
+            weakProtection = weakProtection,
         )
     }
 

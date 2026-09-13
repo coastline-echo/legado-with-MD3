@@ -141,6 +141,13 @@ by appCtx.getSharedPreferences("local", Context.MODE_PRIVATE) {
         return true
     }
 
+    /** 独立备份密码；为空时兼容使用旧版应用访问密码。 */
+    var backupPassword: String?
+        get() = getString("backupPassword", null)?.takeIf { it.isNotEmpty() }
+        set(value) {
+            if (value.isNullOrEmpty()) remove("backupPassword") else putString("backupPassword", value)
+        }
+
     var bookInfoDeleteAlert: Boolean
         get() = getBoolean("bookInfoDeleteAlert", true)
         set(value) {

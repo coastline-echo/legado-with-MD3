@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.help.storage.ImportOldData
+import io.legado.app.help.storage.BackupPasswordPolicyResolver
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.lib.permission.Permissions
 import io.legado.app.lib.permission.PermissionsCompat
@@ -397,6 +398,8 @@ private fun BackupConfigSheets(
     SensitiveItemsSheet(
         show = state.activeSheet == BackupConfigSheet.SensitiveItems,
         items = state.sensitiveItems,
+        backupPassword = state.backupPassword,
+        onPasswordChange = { onIntent(BackupConfigIntent.SetBackupPassword(it)) },
         onToggle = { category, value -> onIntent(BackupConfigIntent.ToggleSensitiveItem(category, value)) },
         onExpand = { category -> onIntent(BackupConfigIntent.ToggleSensitiveExpanded(category)) },
         onConfirm = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
@@ -408,6 +411,8 @@ private fun BackupConfigSheets(
 private fun SensitiveItemsSheet(
     show: Boolean,
     items: ImmutableList<BackupSensitiveItem>,
+    backupPassword: String,
+    onPasswordChange: (String) -> Unit,
     onToggle: (io.legado.app.domain.model.BackupSensitiveCategory, Boolean) -> Unit,
     onExpand: (io.legado.app.domain.model.BackupSensitiveCategory) -> Unit,
     onConfirm: () -> Unit,
@@ -421,6 +426,21 @@ private fun SensitiveItemsSheet(
             MediumTonalButton(onClick = onConfirm, icon = Icons.Default.Save, contentDescription = stringResource(R.string.save))
         },
     ) {
+        val passwordPolicy = BackupPasswordPolicyResolver.resolve(
+            backupPassword
+        )
+        AppTextField(
+            value = backupPassword,
+            onValueChange = onPasswordChange,
+            label = stringResource(R.string.backup_password),
+            backgroundColor = LegadoTheme.colorScheme.surface,
+        )
+        if (passwordPolicy.weakProtection) {
+            androidx.compose.material3.Text(
+                text = stringResource(R.string.backup_password_weak_warning),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
         items.forEach { item ->
             CheckboxItem(
                 title = sensitiveCategoryTitle(item.category),
@@ -601,7 +621,10 @@ private fun BackupConfigDialogs(
     AppAlertDialog(
         show = loading != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
-        title = loading?.let { stringResource(it.titleRes) }.orEmpty(),
+        title = loading?.progress?.stage ?: loading?.let { stringResource(it.titleRes) }.orEmpty(),
+        text = loading?.progress?.let {
+            stringResource(R.string.backup_restore_progress_summary, it.current, it.total, it.warnings, it.failures)
+        },
     )
 
     val preview = dialog as? BackupConfigDialog.RestorePreview

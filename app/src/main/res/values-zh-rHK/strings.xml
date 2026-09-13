@@ -145,6 +145,9 @@
     <string name="backup_sensitive_other">其他敏感欄位</string>
     <string name="backup_sensitive_expand">展開查看具體項目</string>
     <string name="backup_sensitive_collapse">收起具體項目</string>
+    <string name="backup_restore_progress_summary">已處理：%1$d/%2$d\n警告：%3$d\n失敗：%4$d</string>
+    <string name="backup_password">備份密碼（選填）</string>
+    <string name="backup_password_weak_warning">允許使用空密碼，但敏感資訊將處於弱保護狀態。</string>
     <string name="backup_fail">備份失敗\n%s</string>
     <string name="on_restore">正在還原</string>
     <string name="restore_success">還原成功</string>

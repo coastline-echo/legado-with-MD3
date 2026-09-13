@@ -76,4 +76,7 @@ interface BookMarkingDao {
 
     @Query("delete from book_marks where id = :id")
     suspend fun delete(id: String)
+
+    @Query("delete from book_marks")
+    suspend fun deleteAll()
 }

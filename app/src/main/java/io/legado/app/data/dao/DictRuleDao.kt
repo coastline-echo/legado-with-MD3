@@ -40,6 +40,9 @@ interface DictRuleDao {
     @Delete
     fun delete(vararg dictRule: DictRule)
 
+    @Query("delete from dictRules")
+    fun deleteAll()
+
     @Query("UPDATE dictRules SET enabled = :enabled WHERE name IN (:names)")
     suspend fun updateEnabled(names: Set<String>, enabled: Boolean)
 
