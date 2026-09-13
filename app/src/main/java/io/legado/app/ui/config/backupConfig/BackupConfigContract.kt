@@ -5,6 +5,7 @@ import androidx.compose.runtime.Stable
 import io.legado.app.domain.model.settings.BackupSettings
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
+import io.legado.app.domain.model.BackupSensitiveCategory
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -18,6 +19,7 @@ data class BackupConfigUiState(
     val backupIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val dbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val backupDbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
+    val sensitiveItems: ImmutableList<BackupSensitiveItem> = persistentListOf(),
 )
 
 @Stable
@@ -25,6 +27,14 @@ data class BackupIgnoreItem(
     val key: String,
     val title: String,
     val checked: Boolean,
+)
+
+@Stable
+data class BackupSensitiveItem(
+    val category: BackupSensitiveCategory,
+    val title: String,
+    val checked: Boolean,
+    val expanded: Boolean = false,
 )
 
 sealed interface BackupConfigSheet {
@@ -35,6 +45,7 @@ sealed interface BackupConfigSheet {
     data object RestoreFiles : BackupConfigSheet
     data object IgnoreRestoreItems : BackupConfigSheet
     data object IgnoreBackupItems : BackupConfigSheet
+    data object SensitiveItems : BackupConfigSheet
 }
 
 sealed interface BackupConfigDialog {
@@ -45,7 +56,12 @@ sealed interface BackupConfigDialog {
     ) : BackupConfigDialog
 
     data class ConfirmLocalRestoreFallback(val error: String?) : BackupConfigDialog
-    data class RestorePreview(val uri: String, val preview: io.legado.app.domain.model.RestorePreview) : BackupConfigDialog
+    data class RestorePreview(
+        val uri: String,
+        val preview: io.legado.app.domain.model.RestorePreview,
+        val mode: RestoreMode,
+        val selectedCategories: Set<String> = emptySet(),
+    ) : BackupConfigDialog
     data class Loading(@StringRes val titleRes: Int) : BackupConfigDialog
 }
 
@@ -76,6 +92,10 @@ sealed interface BackupConfigIntent {
     data object SaveDbIgnoreItems : BackupConfigIntent
     data class ToggleBackupDbIgnoreItem(val key: String, val value: Boolean) : BackupConfigIntent
     data object SaveBackupDbIgnoreItems : BackupConfigIntent
+    data object OpenSensitiveItems : BackupConfigIntent
+    data class ToggleSensitiveItem(val category: BackupSensitiveCategory, val value: Boolean) : BackupConfigIntent
+    data class ToggleSensitiveExpanded(val category: BackupSensitiveCategory) : BackupConfigIntent
+    data object SaveSensitiveItems : BackupConfigIntent
     data object DismissDialog : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent
@@ -86,6 +106,7 @@ sealed interface BackupConfigIntent {
     data class RequestLocalRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreLocal(val uri: String) : BackupConfigIntent
     data class ConfirmRestorePreview(val uri: String) : BackupConfigIntent
+    data class ToggleRestorePreviewCategory(val category: String) : BackupConfigIntent
     data class RequestNetworkRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreNetwork(val name: String, val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data object ConfirmLocalRestoreFallback : BackupConfigIntent

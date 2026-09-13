@@ -115,18 +115,45 @@ object Restore : KoinComponent {
             return@withContext RestorePreview(false, 0, 0, emptyMap(), listOf("读取备份失败：${it.localizedMessage}"))
         }
         val legacy = "manifest.json" !in manifestBytes
+        val categoryCounts = manifestBytes.filter { !it.startsWith("assets/") }
+            .groupingBy(::previewCategory)
+            .eachCount()
+            .toMutableMap()
+        manifestBytes.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let {
+            categoryCounts["resources"] = it
+        }
         RestorePreview(
             legacyFormat = legacy,
             fileCount = manifestBytes.count { !it.startsWith("assets/") },
             resourceCount = manifestBytes.count { it.startsWith("assets/") },
-            categories = manifestBytes.filter { !it.startsWith("assets/") }
-                .groupingBy { if (it.endsWith(".xml")) "settings" else if (it.endsWith(".json")) "data" else "other" }
-                .eachCount(),
+            categories = categoryCounts,
             warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else emptyList(),
         )
     }
 
-    suspend fun restore(context: Context, uri: Uri, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
+    private fun previewCategory(name: String): String = when (name) {
+        "bookshelf.json" -> "bookshelf"
+        "bookmark.json", "bookMarking.json" -> "bookmark"
+        "bookGroup.json" -> "bookGroup"
+        "bookSource.json" -> "bookSource"
+        "rssSources.json" -> "rssSource"
+        "rssStar.json" -> "rssStar"
+        "replaceRule.json" -> "replaceRule"
+        "readRecord.json", "readRecordDetail.json", "readRecordSession.json" -> "readRecord"
+        "searchHistory.json" -> "searchHistory"
+        "config.xml" -> "settings"
+        "readConfig.json", "shareReadConfig.json" -> "readConfig"
+        "themeConfig.json" -> "themeConfig"
+        "assets/background" -> "resources"
+        else -> name.substringBeforeLast('.', name)
+    }
+
+    suspend fun restore(
+        context: Context,
+        uri: Uri,
+        mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
+        selectedCategories: Set<String> = emptySet(),
+    ) {
         BackupRestoreLock.withLock {
             LogUtils.d(TAG, "开始恢复备份 uri:$uri")
             val unzipResult = kotlin.runCatching {
@@ -143,7 +170,7 @@ object Restore : KoinComponent {
             }
             if (unzipResult.isSuccess) {
                 kotlin.runCatching {
-                    restoreUnzipped(Backup.backupPath, mode)
+                    restoreUnzipped(Backup.backupPath, mode, selectedCategories)
                     LocalConfig.lastBackup = System.currentTimeMillis()
                 }.onFailure {
                     appCtx.toastOnUi("恢复备份出错\n${it.localizedMessage}")
@@ -153,23 +180,34 @@ object Restore : KoinComponent {
         }
     }
 
-    suspend fun restoreLocked(path: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
+    suspend fun restoreLocked(
+        path: String,
+        mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
+        selectedCategories: Set<String> = emptySet(),
+    ) {
         BackupRestoreLock.withLock {
-            restoreUnzipped(path, mode)
+            restoreUnzipped(path, mode, selectedCategories)
         }
     }
 
-    internal suspend fun restoreUnzipped(path: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION) {
+    internal suspend fun restoreUnzipped(
+        path: String,
+        mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
+        selectedCategories: Set<String> = emptySet(),
+    ) {
         val scan = BackupManifestScanner.scan(File(path))
         scan.warnings.forEach { warning ->
             AppLog.put("恢复备份校验警告：$warning")
         }
-        restore(path, mode)
+        restore(path, mode, selectedCategories)
     }
 
-    private suspend fun restore(path: String, mode: RestoreMode) {
+    private suspend fun restore(path: String, mode: RestoreMode, selectedCategories: Set<String>) {
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("读取备份"))
+        fun selected(category: String): Boolean =
+            mode != RestoreMode.BY_CATEGORY || category in selectedCategories
         val aes = BackupAES()
-        fileToListT<Book>(path, "bookshelf.json")?.let {
+        if (selected("bookshelf")) fileToListT<Book>(path, "bookshelf.json")?.let {
             it.forEach { book ->
                 book.upType()
             }
@@ -195,7 +233,7 @@ object Restore : KoinComponent {
             }
         }
         // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
-        if (BackupConfig.dbIsNotIgnored("bookmark")) {
+        if (selected("bookmark") && BackupConfig.dbIsNotIgnored("bookmark")) {
             fileToListT<Bookmark>(path, "bookmark.json")?.let {
                 try {
                     appDb.bookmarkDao.insert(*it.toTypedArray())
@@ -209,13 +247,13 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("bookGroup")) {
+        if (selected("bookGroup") && BackupConfig.dbIsNotIgnored("bookGroup")) {
             fileToListT<BookGroup>(path, "bookGroup.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.bookGroupDao.replaceAll(it)
                 else it.forEach { item -> runCatching { appDb.bookGroupDao.insert(item) } }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("bookSource")) {
+        if (selected("bookSource") && BackupConfig.dbIsNotIgnored("bookSource")) {
             fileToListT<BookSource>(path, "bookSource.json")?.let {
                 try {
                     appDb.bookSourceDao.insert(*it.toTypedArray())
@@ -229,7 +267,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("rssSource")) {
+        if (selected("rssSource") && BackupConfig.dbIsNotIgnored("rssSource")) {
             fileToListT<RssSource>(path, "rssSources.json")?.let {
                 try {
                     appDb.rssSourceDao.insert(*it.toTypedArray())
@@ -237,7 +275,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("rssStar")) {
+        if (selected("rssStar") && BackupConfig.dbIsNotIgnored("rssStar")) {
             fileToListT<RssStar>(path, "rssStar.json")?.let {
                 try {
                     appDb.rssStarDao.insert(*it.toTypedArray())
@@ -245,7 +283,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("replaceRule")) {
+        if (selected("replaceRule") && BackupConfig.dbIsNotIgnored("replaceRule")) {
             fileToListT<ReplaceRule>(path, "replaceRule.json")?.let {
                 try {
                     appDb.replaceRuleDao.insert(*it.toTypedArray())
@@ -253,7 +291,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("searchHistory")) {
+        if (selected("searchHistory") && BackupConfig.dbIsNotIgnored("searchHistory")) {
             fileToListT<SearchKeyword>(path, "searchHistory.json")?.let {
                 try {
                     appDb.searchKeywordDao.insert(*it.toTypedArray())
@@ -261,7 +299,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("sourceSub")) {
+        if (selected("sourceSub") && BackupConfig.dbIsNotIgnored("sourceSub")) {
             fileToListT<RuleSub>(path, "sourceSub.json")?.let {
                 try {
                     appDb.ruleSubDao.insert(*it.toTypedArray())
@@ -269,7 +307,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("txtTocRule")) {
+        if (selected("txtTocRule") && BackupConfig.dbIsNotIgnored("txtTocRule")) {
             fileToListT<TxtTocRule>(path, "txtTocRule.json")?.let {
                 try {
                     appDb.txtTocRuleDao.insert(*it.toTypedArray())
@@ -277,7 +315,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("httpTTS")) {
+        if (selected("httpTTS") && BackupConfig.dbIsNotIgnored("httpTTS")) {
             fileToListT<HttpTTS>(path, "httpTTS.json")?.let {
                 try {
                     appDb.httpTTSDao.insert(*it.toTypedArray())
@@ -285,7 +323,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("dictRule")) {
+        if (selected("dictRule") && BackupConfig.dbIsNotIgnored("dictRule")) {
             fileToListT<DictRule>(path, "dictRule.json")?.let {
                 try {
                     appDb.dictRuleDao.insert(*it.toTypedArray())
@@ -293,7 +331,7 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("keyboardAssists")) {
+        if (selected("keyboardAssists") && BackupConfig.dbIsNotIgnored("keyboardAssists")) {
             fileToListT<KeyboardAssist>(path, "keyboardAssists.json")?.let {
                 try {
                     appDb.keyboardAssistsDao.insert(*it.toTypedArray())
@@ -301,37 +339,37 @@ object Restore : KoinComponent {
                 }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("homepageModules")) {
+        if (selected("homepageModules") && BackupConfig.dbIsNotIgnored("homepageModules")) {
             fileToListT<HomepageModule>(path, "homepageModules.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.homepageModuleDao.replaceAll(it)
                 else runCatching { appDb.homepageModuleDao.upsertAll(it) }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("homepageCustomSets")) {
+        if (selected("homepageCustomSets") && BackupConfig.dbIsNotIgnored("homepageCustomSets")) {
             fileToListT<HomepageCustomSet>(path, "homepageCustomSets.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.homepageCustomSetDao.replaceAll(it)
                 else runCatching { appDb.homepageCustomSetDao.insertAll(it) }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("highlightRule")) {
+        if (selected("highlightRule") && BackupConfig.dbIsNotIgnored("highlightRule")) {
             fileToListT<HighlightRule>(path, "highlightRule.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.highlightRuleDao.replaceAll(it)
                 else runCatching { appDb.highlightRuleDao.insertAll(it) }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("highlightTagRule")) {
+        if (selected("highlightTagRule") && BackupConfig.dbIsNotIgnored("highlightTagRule")) {
             fileToListT<HighlightTagRule>(path, "highlightTagRule.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.highlightTagRuleDao.replaceAll(it)
                 else runCatching { appDb.highlightTagRuleDao.insert(*it.toTypedArray()) }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("tagGroupRule")) {
+        if (selected("tagGroupRule") && BackupConfig.dbIsNotIgnored("tagGroupRule")) {
             fileToListT<TagGroupRule>(path, "tagGroupRule.json")?.let {
                 if (mode == RestoreMode.USE_BACKUP) appDb.tagGroupRuleDao.replaceAll(it)
                 else runCatching { appDb.tagGroupRuleDao.insert(*it.toTypedArray()) }
             }
         }
-        if (BackupConfig.dbIsNotIgnored("readRecord")) {
+        if (selected("readRecord") && BackupConfig.dbIsNotIgnored("readRecord")) {
             appDb.withTransaction {
                 fileToListT<ReadRecord>(path, "readRecord.json")?.forEach { readRecord ->
                     try { restoreReadRecord(readRecord) } catch (_: SQLiteConstraintException) { }
@@ -348,7 +386,7 @@ object Restore : KoinComponent {
             // 避免同一备份重复导入导致阅读时长翻倍。
             get<ReadRecordRepository>().reconcileRestoredReadRecordTotals()
         }
-        if (BackupConfig.dbIsNotIgnored("server")) {
+        if (selected("server") && BackupConfig.dbIsNotIgnored("server")) {
             File(path, "servers.json").takeIf {
                 it.exists()
             }?.runCatching {
@@ -367,15 +405,19 @@ object Restore : KoinComponent {
             }
         }
         File(path, DirectLinkUpload.ruleFileName).takeIf {
+            selected("directLinkUploadRule") &&
             it.exists()
         }?.runCatching {
             val json = readText()
-            ACache.get(cacheDir = false).put(DirectLinkUpload.ruleFileName, json)
+            val cache = ACache.get(cacheDir = false)
+            if (mode == RestoreMode.USE_BACKUP || cache.getAsString(DirectLinkUpload.ruleFileName).isNullOrBlank()) {
+                cache.put(DirectLinkUpload.ruleFileName, json)
+            }
         }?.onFailure {
             AppLog.put("恢复直链上传出错\n${it.localizedMessage}", it)
         }
         //恢复主题配置
-        if (!BackupConfig.ignoreThemeConfig) {
+        if (selected("themeConfig") && !BackupConfig.ignoreThemeConfig) {
             File(path, ThemeConfigStore.configFileName).takeIf {
                 it.exists()
             }?.runCatching {
@@ -389,14 +431,17 @@ object Restore : KoinComponent {
             }
         }
         File(path, BookCover.configFileName).takeIf {
+            selected("coverConfig") &&
             it.exists() && !BackupConfig.ignoreCoverConfig
         }?.runCatching {
             val json = readText()
-            BookCover.saveCoverRule(json)
+            if (mode == RestoreMode.USE_BACKUP || BookCover.getConfig() == null) {
+                BookCover.saveCoverRule(json)
+            }
         }?.onFailure {
             AppLog.put("恢复封面规则出错\n${it.localizedMessage}", it)
         }
-        if (!BackupConfig.ignoreReadConfig) {
+        if (selected("readConfig") && !BackupConfig.ignoreReadConfig) {
             //恢复阅读界面配置
             File(path, ReadBookConfig.configFileName).takeIf {
                 it.exists()
@@ -435,7 +480,7 @@ object Restore : KoinComponent {
         }
         // 恢复配置文件 (手动解析 XML，替代反射逻辑)
         val configFile = File(path, "config.xml")
-        if (configFile.exists()) {
+        if (selected("settings") && configFile.exists()) {
             try {
                 val map = readXmlToMap(configFile)
                 if (map.isNotEmpty()) {
@@ -445,8 +490,10 @@ object Restore : KoinComponent {
                 AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
             }
         }
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("恢复书架"))
 
-        restoreBackgroundResources(path)
+        if (selected("resources")) restoreBackgroundResources(path)
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("恢复图片"))
 
         appCtx.toastOnUi(R.string.restore_success)
         withContext(Main) {
@@ -457,6 +504,7 @@ object Restore : KoinComponent {
             }
             ThemeConfigStore.applyDayNight(appCtx)
         }
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("完成"))
     }
 
     private fun localBookLocationStatus(bookUrl: String): LocalBookLocationStatus {

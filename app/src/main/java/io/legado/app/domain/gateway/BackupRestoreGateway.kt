@@ -6,6 +6,10 @@ import io.legado.app.domain.model.RestorePreview
 interface BackupRestoreGateway {
     suspend fun backup(path: String?, mode: String)
     suspend fun restoreLocal(uri: String)
-    suspend fun restoreLocal(uri: String, mode: RestoreMode) = restoreLocal(uri)
+    suspend fun restoreLocal(
+        uri: String,
+        mode: RestoreMode,
+        selectedCategories: Set<String> = emptySet(),
+    ) = restoreLocal(uri)
     suspend fun previewLocal(uri: String): RestorePreview
 }

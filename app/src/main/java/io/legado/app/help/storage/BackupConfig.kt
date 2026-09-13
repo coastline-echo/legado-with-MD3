@@ -6,6 +6,8 @@ import io.legado.app.data.local.preferences.LocalPreferencesKeys
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
+import io.legado.app.domain.model.BackupSensitiveCategory
+import io.legado.app.domain.model.BackupSensitiveSelection
 import splitties.init.appCtx
 
 internal val alwaysIgnoredPreferenceKeys = setOf(
@@ -28,6 +30,25 @@ internal val alwaysIgnoredPreferenceKeys = setOf(
  */
 @Suppress("ConstPropertyName")
 object BackupConfig {
+
+    private val sensitiveSelectionPath = FileUtils.getPath(appCtx.filesDir, "backupSensitiveSelection.json")
+    private var sensitiveSelectionValue: BackupSensitiveSelection? = null
+    val sensitiveSelection: BackupSensitiveSelection
+        get() = sensitiveSelectionValue ?: run {
+            val file = FileUtils.createFileIfNotExist(sensitiveSelectionPath)
+            val values = GSON.fromJsonObject<Set<String>>(file.readText()).getOrNull().orEmpty()
+            BackupSensitiveSelection(
+                selected = values.mapNotNull { value ->
+                    runCatching { BackupSensitiveCategory.valueOf(value) }.getOrNull()
+                }.toSet().ifEmpty { BackupSensitiveCategory.entries.toSet() },
+            ).also { sensitiveSelectionValue = it }
+        }
+
+    fun saveSensitiveSelection(selection: BackupSensitiveSelection) {
+        sensitiveSelectionValue = selection
+        FileUtils.createFileIfNotExist(sensitiveSelectionPath)
+            .writeText(GSON.toJson(selection.selected.map { it.name }.toSet()))
+    }
 
     private val ignoreConfigPath = FileUtils.getPath(appCtx.filesDir, "restoreIgnore.json")
     val ignoreConfig: HashMap<String, Boolean> by lazy {

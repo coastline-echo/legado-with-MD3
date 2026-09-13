@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
@@ -273,6 +274,11 @@ fun BackupConfigScreen(
                         onClick = { onIntent(BackupConfigIntent.OpenBackupIgnoreDialog) },
                     )
                     ClickableSettingItem(
+                        title = stringResource(R.string.backup_sensitive_title),
+                        description = stringResource(R.string.backup_sensitive_summary),
+                        onClick = { onIntent(BackupConfigIntent.OpenSensitiveItems) },
+                    )
+                    ClickableSettingItem(
                         title = stringResource(R.string.menu_import_old_version),
                         description = stringResource(R.string.import_old_summary),
                         onClick = { onIntent(BackupConfigIntent.RequestImportOldData) },
@@ -388,7 +394,72 @@ private fun BackupConfigSheets(
         onConfirm = { onIntent(BackupConfigIntent.SaveBackupIgnoreItems) },
         onDismissRequest = { onIntent(BackupConfigIntent.SaveBackupIgnoreItems) },
     )
+    SensitiveItemsSheet(
+        show = state.activeSheet == BackupConfigSheet.SensitiveItems,
+        items = state.sensitiveItems,
+        onToggle = { category, value -> onIntent(BackupConfigIntent.ToggleSensitiveItem(category, value)) },
+        onExpand = { category -> onIntent(BackupConfigIntent.ToggleSensitiveExpanded(category)) },
+        onConfirm = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
+        onDismiss = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
+    )
 }
+
+@Composable
+private fun SensitiveItemsSheet(
+    show: Boolean,
+    items: ImmutableList<BackupSensitiveItem>,
+    onToggle: (io.legado.app.domain.model.BackupSensitiveCategory, Boolean) -> Unit,
+    onExpand: (io.legado.app.domain.model.BackupSensitiveCategory) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AppModalBottomSheet(
+        show = show,
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.backup_sensitive_title),
+        endAction = {
+            MediumTonalButton(onClick = onConfirm, icon = Icons.Default.Save, contentDescription = stringResource(R.string.save))
+        },
+    ) {
+        items.forEach { item ->
+            CheckboxItem(
+                title = sensitiveCategoryTitle(item.category),
+                checked = item.checked,
+                onCheckedChange = { onToggle(item.category, it) },
+            )
+            androidx.compose.material3.Text(
+                text = stringResource(
+                    if (item.expanded) R.string.backup_sensitive_collapse
+                    else R.string.backup_sensitive_expand
+                ),
+                modifier = Modifier
+                    .padding(start = 16.dp, bottom = 4.dp)
+                    .clickable { onExpand(item.category) },
+            )
+            if (item.expanded) {
+                androidx.compose.material3.Text(
+                    text = stringResource(R.string.backup_sensitive_items_hint),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun sensitiveCategoryTitle(category: io.legado.app.domain.model.BackupSensitiveCategory): String =
+    stringResource(
+        when (category) {
+            io.legado.app.domain.model.BackupSensitiveCategory.WEBDAV_CREDENTIALS -> R.string.backup_sensitive_webdav
+            io.legado.app.domain.model.BackupSensitiveCategory.SERVER_CREDENTIALS -> R.string.backup_sensitive_server
+            io.legado.app.domain.model.BackupSensitiveCategory.BOOK_SOURCE_AUTH -> R.string.backup_sensitive_source
+            io.legado.app.domain.model.BackupSensitiveCategory.REQUEST_HEADERS -> R.string.backup_sensitive_headers
+            io.legado.app.domain.model.BackupSensitiveCategory.RSS_AUTH -> R.string.backup_sensitive_rss
+            io.legado.app.domain.model.BackupSensitiveCategory.TTS_API_KEYS -> R.string.backup_sensitive_tts
+            io.legado.app.domain.model.BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS -> R.string.backup_sensitive_direct_link
+            io.legado.app.domain.model.BackupSensitiveCategory.OTHER -> R.string.backup_sensitive_other
+        }
+    )
 
 @Composable
 private fun IgnoreItemsSheet(
@@ -546,12 +617,24 @@ private fun BackupConfigDialogs(
                 it.preview.warnings.size,
             )
         }.orEmpty(),
+        content = {
+            if (preview?.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY) {
+                preview.selectedCategories.forEach { category ->
+                    CheckboxItem(
+                        title = category,
+                        checked = category in preview.selectedCategories,
+                        onCheckedChange = { onIntent(BackupConfigIntent.ToggleRestorePreviewCategory(category)) },
+                    )
+                }
+            }
+        },
         confirmText = stringResource(R.string.restore),
         onConfirm = { preview?.let { onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri)) } },
         dismissText = stringResource(R.string.cancel),
         onDismiss = { onIntent(BackupConfigIntent.DismissDialog) },
     )
 }
+
 
 @Composable
 fun ConfirmDialog(

@@ -145,6 +145,7 @@ object Backup {
     }
 
     private suspend fun backup(context: Context, path: String?, mode: String = "both") {
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("准备数据"))
         LogUtils.d(TAG, "开始备份 path:$path")
         LocalConfig.lastBackup = System.currentTimeMillis()
         val aes = BackupAES()
@@ -154,6 +155,7 @@ object Backup {
             "bookshelf.json",
             backupPath,
         )
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("导出数据库"))
         // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
         if (BackupConfig.dbIsNotIgnored("bookmark", true)) {
             writeListToJson(appDb.bookmarkDao.all, "bookmark.json", backupPath)
@@ -163,10 +165,18 @@ object Backup {
             writeListToJson(appDb.bookGroupDao.all, "bookGroup.json", backupPath)
         }
         if (BackupConfig.dbIsNotIgnored("bookSource", true)) {
-            writeListToJson(appDb.bookSourceDao.all, "bookSource.json", backupPath)
+            writeListToJson(
+                appDb.bookSourceDao.all.map(::sanitizeBookSource),
+                "bookSource.json",
+                backupPath,
+            )
         }
         if (BackupConfig.dbIsNotIgnored("rssSource", true)) {
-            writeListToJson(appDb.rssSourceDao.all, "rssSources.json", backupPath)
+            writeListToJson(
+                appDb.rssSourceDao.all.map(::sanitizeRssSource),
+                "rssSources.json",
+                backupPath,
+            )
         }
         if (BackupConfig.dbIsNotIgnored("rssStar", true)) {
             writeListToJson(appDb.rssStarDao.all, "rssStar.json", backupPath)
@@ -189,7 +199,11 @@ object Backup {
             writeListToJson(appDb.txtTocRuleDao.all, "txtTocRule.json", backupPath)
         }
         if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
-            writeListToJson(appDb.httpTTSDao.all, "httpTTS.json", backupPath)
+            writeListToJson(
+                appDb.httpTTSDao.all.map(::sanitizeHttpTts),
+                "httpTTS.json",
+                backupPath,
+            )
         }
         if (BackupConfig.dbIsNotIgnored("keyboardAssists", true)) {
             writeListToJson(appDb.keyboardAssistsDao.all, "keyboardAssists.json", backupPath)
@@ -216,7 +230,9 @@ object Backup {
         if (BackupConfig.dbIsNotIgnored("tagGroupRule", true)) {
             writeListToJson(appDb.tagGroupRuleDao.getAll(), "tagGroupRule.json", backupPath)
         }
-        if (BackupConfig.dbIsNotIgnored("server", true)) {
+        if (BackupConfig.dbIsNotIgnored("server", true) &&
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.SERVER_CREDENTIALS)
+        ) {
             GSON.toJson(appDb.serverDao.all).let { json ->
                 aes.runCatching {
                     encryptBase64(json)
@@ -243,9 +259,11 @@ object Backup {
                     .writeText(it)
             }
         }
-        DirectLinkUpload.getConfig()?.let {
+        if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS)) {
+            DirectLinkUpload.getConfig()?.let {
             FileUtils.createFileIfNotExist(backupPath + File.separator + DirectLinkUpload.ruleFileName)
                 .writeText(GSON.toJson(it))
+            }
         }
         if (!BackupConfig.backupIgnoreCoverConfig) {
             BookCover.getConfig()?.let {
@@ -263,7 +281,10 @@ object Backup {
         xmlBuilder.append("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n")
         xmlBuilder.append("<map>\n")
         configMap.forEach { (key, value) ->
-            if (BackupConfig.keyIsNotIgnore(key, true)) {
+            if (BackupConfig.keyIsNotIgnore(key, true) &&
+                (key != PreferKey.webDavPassword ||
+                    BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.WEBDAV_CREDENTIALS))
+            ) {
                 val finalValue = if (key == PreferKey.webDavPassword) {
                     aes.runCatching { encryptBase64(value.toString()) }.getOrElse {
                         AppLog.put("备份配置加密失败，已跳过敏感键：$key", it)
@@ -301,6 +322,7 @@ object Backup {
             .writeText(xmlBuilder.toString())
 
         val resourceFiles = copyBackgroundResources(backupPath)
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("处理图片资源", resourceFiles.size, resourceFiles.size))
 
         val filesForManifest = backupFileNames
             .filter { it != "manifest.json" }
@@ -330,6 +352,7 @@ object Backup {
         )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
             .writeText(GSON.toJson(manifest))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("生成校验清单", filesForManifest.size, filesForManifest.size))
 
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
@@ -346,6 +369,7 @@ object Backup {
             zipFileName
         }
         if (ZipUtils.zipFiles(paths, zipFilePath)) {
+            BackupRestoreProgressBus.emit(BackupRestoreProgress("生成 ZIP"))
             if (mode == "both" || mode == "local") {
                 when {
                     path.isNullOrBlank() -> {
@@ -362,6 +386,7 @@ object Backup {
                 }
             }
             if (mode == "both" || mode == "webdav") {
+                BackupRestoreProgressBus.emit(BackupRestoreProgress("上传 WebDAV"))
                 try {
                     AppWebDav.backUpWebDav(zipFileName)
                 } catch (e: Exception) {
@@ -372,6 +397,7 @@ object Backup {
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
+        BackupRestoreProgressBus.emit(BackupRestoreProgress("完成"))
     }
 
     private fun manifestCategory(fileName: String): String = when (fileName) {
@@ -381,6 +407,51 @@ object Backup {
         "background.json" -> "resources"
         else -> "database"
     }
+
+    private fun sanitizeBookSource(source: io.legado.app.data.entities.BookSource) = source.copy(
+        header = source.header.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.REQUEST_HEADERS)
+        },
+        loginUrl = source.loginUrl.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH)
+        },
+        loginUi = source.loginUi.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH)
+        },
+        loginCheckJs = source.loginCheckJs.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH)
+        },
+    )
+
+    private fun sanitizeRssSource(source: io.legado.app.data.entities.RssSource) = source.copy(
+        header = source.header.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.REQUEST_HEADERS)
+        },
+        loginUrl = source.loginUrl.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH)
+        },
+        loginUi = source.loginUi.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH)
+        },
+        loginCheckJs = source.loginCheckJs.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH)
+        },
+    )
+
+    private fun sanitizeHttpTts(source: io.legado.app.data.entities.HttpTTS) = source.copy(
+        header = source.header.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)
+        },
+        loginUrl = source.loginUrl.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)
+        },
+        loginUi = source.loginUi.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)
+        },
+        loginCheckJs = source.loginCheckJs.takeIf {
+            BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)
+        },
+    )
 
     /** 将配置引用的背景图片复制进 ZIP，避免依赖设备绝对路径或独立 WebDAV 目录。 */
     private fun copyBackgroundResources(rootPath: String): List<File> {

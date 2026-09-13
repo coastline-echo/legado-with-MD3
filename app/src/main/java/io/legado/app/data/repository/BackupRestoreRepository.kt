@@ -24,9 +24,9 @@ class BackupRestoreRepository : BackupRestoreGateway {
         }
     }
 
-    override suspend fun restoreLocal(uri: String, mode: RestoreMode) {
+    override suspend fun restoreLocal(uri: String, mode: RestoreMode, selectedCategories: Set<String>) {
         withContext(IO) {
-            Restore.restore(appCtx, uri.toUri(), mode)
+            Restore.restore(appCtx, uri.toUri(), mode, selectedCategories)
         }
     }
 

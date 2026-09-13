@@ -9,6 +9,7 @@ import io.legado.app.domain.model.settings.BackupSettings
 import io.legado.app.domain.usecase.BackupRestoreUseCase
 import io.legado.app.domain.usecase.WebDavBackupUseCase
 import io.legado.app.domain.model.RestoreMode
+import io.legado.app.domain.model.BackupSensitiveCategory
 import io.legado.app.utils.isContentScheme
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +33,7 @@ class BackupConfigViewModel(
             backupIgnoreItems = loadBackupIgnoreItems(),
             dbIgnoreItems = loadDbIgnoreItems(),
             backupDbIgnoreItems = loadBackupDbIgnoreItems(),
+            sensitiveItems = loadSensitiveItems(),
         )
     )
     val uiState = _uiState.asStateFlow()
@@ -92,6 +94,19 @@ class BackupConfigViewModel(
             )
 
             BackupConfigIntent.SaveBackupDbIgnoreItems -> saveBackupDbIgnoreItems()
+            BackupConfigIntent.OpenSensitiveItems ->
+                _uiState.update { it.copy(activeSheet = BackupConfigSheet.SensitiveItems) }
+            is BackupConfigIntent.ToggleSensitiveItem -> _uiState.update { state ->
+                state.copy(sensitiveItems = state.sensitiveItems.map { item ->
+                    if (item.category == intent.category) item.copy(checked = intent.value) else item
+                }.toImmutableList())
+            }
+            is BackupConfigIntent.ToggleSensitiveExpanded -> _uiState.update { state ->
+                state.copy(sensitiveItems = state.sensitiveItems.map { item ->
+                    if (item.category == intent.category) item.copy(expanded = !item.expanded) else item
+                }.toImmutableList())
+            }
+            BackupConfigIntent.SaveSensitiveItems -> saveSensitiveItems()
             BackupConfigIntent.DismissDialog -> _uiState.update { it.copy(activeDialog = null) }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
@@ -103,6 +118,15 @@ class BackupConfigViewModel(
             is BackupConfigIntent.RequestLocalRestore -> requestLocalRestore(intent.mode)
             is BackupConfigIntent.RestoreLocal -> restoreLocal(intent.uri)
             is BackupConfigIntent.ConfirmRestorePreview -> performRestoreLocal(intent.uri)
+            is BackupConfigIntent.ToggleRestorePreviewCategory -> _uiState.update { state ->
+                val dialog = state.activeDialog as? BackupConfigDialog.RestorePreview ?: return@update state
+                val selected = if (intent.category in dialog.selectedCategories) {
+                    dialog.selectedCategories - intent.category
+                } else {
+                    dialog.selectedCategories + intent.category
+                }
+                state.copy(activeDialog = dialog.copy(selectedCategories = selected))
+            }
             is BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups(intent.mode)
             is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name, selectedRestoreMode)
             BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore(RestoreMode.KEEP_APPLICATION)
@@ -311,15 +335,41 @@ class BackupConfigViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val preview = backupRestoreUseCase.previewLocal(Uri.parse(uri).toString())
             withContext(Dispatchers.Main) {
-                _uiState.update { it.copy(activeDialog = BackupConfigDialog.RestorePreview(uri, preview)) }
+                _uiState.update {
+                    it.copy(
+                        activeDialog = BackupConfigDialog.RestorePreview(
+                            uri = uri,
+                            preview = preview,
+                            mode = selectedRestoreMode,
+                            selectedCategories = preview.categories.keys,
+                        )
+                    )
+                }
             }
         }
     }
 
+    private fun saveSensitiveItems() {
+        val selected = _uiState.value.sensitiveItems.filter { it.checked }
+            .map { it.category }.toSet()
+        io.legado.app.help.storage.BackupConfig.saveSensitiveSelection(
+            io.legado.app.domain.model.BackupSensitiveSelection(selected = selected)
+        )
+        _uiState.update { it.copy(activeSheet = null) }
+    }
+
     private fun performRestoreLocal(uri: String) {
+        val categories = (_uiState.value.activeDialog as? BackupConfigDialog.RestorePreview)
+            ?.selectedCategories.orEmpty()
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { backupRestoreUseCase.restoreLocal(Uri.parse(uri).toString(), selectedRestoreMode) }
+            runCatching {
+                backupRestoreUseCase.restoreLocal(
+                    Uri.parse(uri).toString(),
+                    selectedRestoreMode,
+                    categories,
+                )
+            }
                 .fold(
                     onSuccess = { finishRestoreSuccess() },
                     onFailure = { finishRestoreFailure(it.localizedMessage) },
@@ -430,5 +480,13 @@ class BackupConfigViewModel(
                 )
             }
             .toImmutableList()
+
+        fun loadSensitiveItems() = BackupSensitiveCategory.entries.map { category ->
+            BackupSensitiveItem(
+                category = category,
+                title = category.name,
+                checked = io.legado.app.help.storage.BackupConfig.sensitiveSelection.includes(category),
+            )
+        }.toImmutableList()
     }
 }
