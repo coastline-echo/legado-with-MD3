@@ -89,3 +89,30 @@ fun RestoreOptionSheet(
         )
     }
 }
+
+/** 旧版数据既可从完整目录导入，也可直接选择单个 JSON 文件。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LegacyImportOptionSheet(
+    show: Boolean,
+    onDismissRequest: () -> Unit,
+    onSelectFile: () -> Unit,
+    onSelectDirectory: () -> Unit,
+) {
+    OptionSheet(
+        show = show,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.menu_import_old_version),
+    ) {
+        OptionCard(
+            icon = Icons.Default.PhoneAndroid,
+            text = stringResource(R.string.select_file),
+            onClick = onSelectFile,
+        )
+        OptionCard(
+            icon = Icons.Default.PhoneAndroid,
+            text = stringResource(R.string.select_folder),
+            onClick = onSelectDirectory,
+        )
+    }
+}

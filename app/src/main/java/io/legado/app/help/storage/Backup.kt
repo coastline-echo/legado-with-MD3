@@ -9,8 +9,12 @@ import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
+import io.legado.app.domain.gateway.ThemeSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.domain.model.BackupSensitiveCategory
 import io.legado.app.domain.model.BackupRestoreStage
+import io.legado.app.domain.model.BackupRestoreOutcome
+import io.legado.app.domain.model.BackupRestoreResult
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.DirectLinkUpload
@@ -56,10 +60,25 @@ import java.util.concurrent.TimeUnit
  */
 object Backup {
 
+    /** 提供敏感项目稳定标识给设置界面，严禁返回密码、Cookie 等敏感原文。 */
+    fun sensitiveItemIdentifiers(category: BackupSensitiveCategory): List<String> = when (category) {
+        BackupSensitiveCategory.SERVER_CREDENTIALS -> appDb.serverDao.all.map { "server:${it.id}" }
+        BackupSensitiveCategory.BOOK_SOURCE_AUTH,
+        BackupSensitiveCategory.REQUEST_HEADERS -> appDb.bookSourceDao.all.map { "bookSource:${it.bookSourceUrl}" }
+        BackupSensitiveCategory.RSS_AUTH -> appDb.rssSourceDao.all.map { "rssSource:${it.sourceUrl}" }
+        BackupSensitiveCategory.TTS_API_KEYS -> appDb.httpTTSDao.all.map { "httpTTS:${it.id}" }
+        BackupSensitiveCategory.WEBDAV_CREDENTIALS -> listOf("webDavPassword")
+        BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS -> listOf("directLinkUploadRule")
+        BackupSensitiveCategory.OTHER -> emptyList()
+    }
+
     private val readStyleGateway: ReadStyleGateway
         get() = GlobalContext.get().get()
 
     private val backupSettingsGateway: BackupSettingsGateway
+        get() = GlobalContext.get().get()
+
+    private val themeSettingsGateway: ThemeSettingsGateway
         get() = GlobalContext.get().get()
 
     val backupPath: String by lazy {
@@ -79,6 +98,20 @@ object Backup {
         PreferKey.navIconExplore,
         PreferKey.navIconRss,
         PreferKey.navIconMy,
+        // 主题、书架和阅读器关键设置
+        PreferKey.appTheme,
+        PreferKey.themeMode,
+        PreferKey.bookshelfLayout,
+        PreferKey.bookshelfSort,
+        PreferKey.readStyleSelect,
+        PreferKey.comicStyleSelect,
+        // 网络、TTS 与服务关键设置
+        PreferKey.webService,
+        PreferKey.webPort,
+        PreferKey.ttsEngine,
+        PreferKey.ttsSpeechRate,
+        PreferKey.webDavUrl,
+        PreferKey.webDavDir,
     )
 
     private val backupFileNames by lazy {
@@ -160,6 +193,8 @@ object Backup {
     }
 
     private suspend fun backup(context: Context, path: String?, mode: String = "both") {
+        var warningCount = 0
+        var webDavUploadFailed = false
         BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PREPARE))
         LogUtils.d(TAG, "开始备份 path:$path")
         LocalConfig.lastBackup = System.currentTimeMillis()
@@ -249,12 +284,15 @@ object Backup {
             BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.SERVER_CREDENTIALS)
         ) {
             GSON.toJson(appDb.serverDao.all).let { json ->
-                aes.runCatching {
-                    encryptBase64(json)
-                }.getOrDefault(json).let {
-                    FileUtils.createFileIfNotExist(backupPath + File.separator + "servers.json")
-                        .writeText(it)
-                }
+                // 敏感数据加密失败时必须跳过，禁止回退写入明文。
+                aes.runCatching { encryptBase64(json) }
+                    .onSuccess { encrypted ->
+                        FileUtils.createFileIfNotExist(backupPath + File.separator + "servers.json")
+                            .writeText(encrypted)
+                    }
+                    .onFailure {
+                        AppLog.put("备份服务器配置加密失败，已跳过敏感数据", it)
+                    }
             }
         }
         currentCoroutineContext().ensureActive()
@@ -290,52 +328,37 @@ object Backup {
         BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PROCESS_RESOURCES))
         val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
+            .toMutableMap()
+        // 文本选择菜单顺序保存在 ReadSettings DataStore，不在 AppConfigStore 中。
+        configMap[PreferKey.textSelectMenuConfig] = GlobalContext.get().get<ReadSettingsGateway>().currentSettings.textSelectMenuConfig
         val writtenConfigKeys = mutableSetOf<String>()
         val ignoredConfigKeys = mutableSetOf<String>()
         val unsupportedConfigKeys = mutableSetOf<String>()
-        val xmlBuilder = StringBuilder()
-        xmlBuilder.append("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n")
-        xmlBuilder.append("<map>\n")
+        val configToEncode = linkedMapOf<String, Any?>()
         configMap.forEach { (key, value) ->
-            if (BackupConfig.keyIsNotIgnore(key, true) &&
+            val shouldEncode = BackupConfig.keyIsNotIgnore(key, true) &&
                 (key != PreferKey.webDavPassword ||
                     BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.WEBDAV_CREDENTIALS))
-            ) {
-                val finalValue = if (key == PreferKey.webDavPassword) {
-                    aes.runCatching { encryptBase64(value.toString()) }.getOrElse {
-                        AppLog.put("备份配置加密失败，已跳过敏感键：$key", it)
-                        return@forEach
-                    }
-                } else value
-
-                when (finalValue) {
-                    is String -> {
-                        writtenConfigKeys += key
-                        xmlBuilder.append("    <string name=\"$key\">${finalValue.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")}</string>\n")
-                    }
-                    is Set<*> -> {
-                        val values = finalValue.filterIsInstance<String>()
-                        writtenConfigKeys += key
-                        xmlBuilder.append("    <set name=\"$key\">\n")
-                        values.forEach { item ->
-                            xmlBuilder.append("        <string>${item.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")}</string>\n")
-                        }
-                        xmlBuilder.append("    </set>\n")
-                    }
-                    is Int -> { writtenConfigKeys += key; xmlBuilder.append("    <int name=\"$key\" value=\"$finalValue\" />\n") }
-                    is Long -> { writtenConfigKeys += key; xmlBuilder.append("    <long name=\"$key\" value=\"$finalValue\" />\n") }
-                    is Float -> { writtenConfigKeys += key; xmlBuilder.append("    <float name=\"$key\" value=\"$finalValue\" />\n") }
-                    is Boolean -> { writtenConfigKeys += key; xmlBuilder.append("    <boolean name=\"$key\" value=\"$finalValue\" />\n") }
-                    else -> {
-                        unsupportedConfigKeys += key
-                        AppLog.put("备份配置类型不支持，已跳过：$key (${finalValue::class.java.simpleName})")
-                    }
+            if (!shouldEncode) {
+                ignoredConfigKeys += key
+                return@forEach
+            }
+            val finalValue = if (key == PreferKey.webDavPassword) {
+                aes.runCatching { encryptBase64(value.toString()) }.getOrElse {
+                    AppLog.put("备份配置加密失败，已跳过敏感键：$key", it)
+                    return@forEach
                 }
-            } else ignoredConfigKeys += key
+            } else value
+            configToEncode[key] = finalValue
         }
-        xmlBuilder.append("</map>")
+        val configEncoding = BackupConfigCodec.encode(configToEncode)
+        writtenConfigKeys += configEncoding.writtenKeys
+        unsupportedConfigKeys += configEncoding.unsupportedKeys
+        unsupportedConfigKeys.forEach { key ->
+            AppLog.put("备份配置类型不支持，已跳过：$key")
+        }
         FileUtils.createFileIfNotExist(backupPath + File.separator + "config.xml")
-            .writeText(xmlBuilder.toString())
+            .writeText(configEncoding.xml)
 
         val (resourceFiles, resourceAliases) = copyBackgroundResources(backupPath)
         BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.PROCESS_RESOURCES, resourceFiles.size, resourceFiles.size))
@@ -344,22 +367,32 @@ object Backup {
             .filter { it != "manifest.json" }
             .map { File(backupPath, it) }
             .filter(File::isFile)
+        val configIntegrity = BackupConfigIntegrityChecker.check(
+            snapshotKeys = configMap.keys,
+            written = writtenConfigKeys,
+            ignored = ignoredConfigKeys,
+            unsupported = unsupportedConfigKeys,
+            requiredKeys = requiredConfigKeys,
+        )
+        warningCount += configIntegrity.unsupported.size +
+            configIntegrity.failed.size + configIntegrity.notSet.size
         val manifest = BackupManifestBuilder.build(
             root = File(backupPath),
             files = filesForManifest,
             categories = filesForManifest.groupBy { manifestCategory(it.name) }
                 .mapValues { (_, files) -> files.map(File::getName) },
             ignoredCategories = BackupConfig.backupIgnoreConfig.filterValues { it }.keys,
+            restoreIgnoredCategories = buildSet {
+                addAll(BackupConfig.dbIgnoreConfig.filterValues { it }.keys)
+                if (BackupConfig.ignoreReadConfig) add("readConfig")
+                if (BackupConfig.ignoreThemeConfig) add("themeConfig")
+                if (BackupConfig.ignoreCoverConfig) add("coverConfig")
+            },
             configKeys = writtenConfigKeys,
             ignoredConfigKeys = ignoredConfigKeys,
             unsupportedConfigKeys = unsupportedConfigKeys,
-            notSetConfigKeys = BackupConfigIntegrityChecker.check(
-                snapshotKeys = configMap.keys,
-                written = writtenConfigKeys,
-                ignored = ignoredConfigKeys,
-                unsupported = unsupportedConfigKeys,
-                requiredKeys = requiredConfigKeys,
-            ).notSet,
+            failedConfigKeys = configIntegrity.failed,
+            notSetConfigKeys = configIntegrity.notSet,
             appVersion = BuildConfig.VERSION_NAME,
             resources = resourceFiles,
             resourceAliases = resourceAliases,
@@ -368,13 +401,27 @@ object Backup {
             sensitiveItems = buildSet {
                 if (filesForManifest.any { it.name == "servers.json" }) {
                     add(BackupSensitiveCategory.SERVER_CREDENTIALS.name)
+                    appDb.serverDao.all.forEach { server -> add("server:${server.id}") }
                 }
                 if (PreferKey.webDavPassword in writtenConfigKeys) {
                     add(BackupSensitiveCategory.WEBDAV_CREDENTIALS.name)
                 }
+                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH)) {
+                    appDb.bookSourceDao.all.forEach { source -> add("bookSource:${source.bookSourceUrl}") }
+                }
+                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH)) {
+                    appDb.rssSourceDao.all.forEach { source -> add("rssSource:${source.sourceUrl}") }
+                }
+                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)) {
+                    appDb.httpTTSDao.all.forEach { source -> add("httpTTS:${source.id}") }
+                }
             },
             weakProtection = BackupPasswordPolicyResolver.resolve(
-                LocalConfig.backupPassword ?: LocalConfig.password
+                BackupPasswordResolver.resolve(
+                    explicitPassword = null,
+                    storedBackupPassword = LocalConfig.backupPassword,
+                    applicationPassword = LocalConfig.password,
+                ).password,
             ).weakProtection,
         )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
@@ -413,6 +460,14 @@ object Backup {
                 try {
                     AppWebDav.backUpWebDav(zipFileName)
                 } catch (e: Exception) {
+                    warningCount++
+                    webDavUploadFailed = true
+                    BackupRestoreProgressBus.emit(
+                        BackupRestoreProgress(
+                            stage = BackupRestoreStage.UPLOAD_WEBDAV,
+                            warnings = 1,
+                        )
+                    )
                     AppLog.put("上传备份至webdav失败\n$e", e)
                 }
             }
@@ -421,6 +476,23 @@ object Backup {
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
         BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.COMPLETE))
+        BackupRestoreResultBus.emit(
+            BackupRestoreResult(
+                outcome = if (warningCount == 0) BackupRestoreOutcome.SUCCESS
+                else BackupRestoreOutcome.SUCCESS_WITH_WARNINGS,
+                warnings = warningCount,
+                writtenConfigKeys = configIntegrity.written.size,
+                ignoredConfigKeys = configIntegrity.ignored.size,
+                unsupportedConfigKeys = configIntegrity.unsupported.size,
+                failedConfigKeys = configIntegrity.failed.size,
+                notSetConfigKeys = configIntegrity.notSet.size,
+                ignoredConfigKeyNames = configIntegrity.ignored,
+                unsupportedConfigKeyNames = configIntegrity.unsupported,
+                failedConfigKeyNames = configIntegrity.failed,
+                notSetConfigKeyNames = configIntegrity.notSet,
+                webDavUploadFailed = webDavUploadFailed,
+            )
+        )
     }
 
     private fun manifestCategory(fileName: String): String = when (fileName) {
@@ -495,16 +567,38 @@ object Backup {
     private fun copyBackgroundResources(rootPath: String): Pair<List<File>, Map<String, String>> {
         val targetDir = File(rootPath, "assets/background").apply { mkdirs() }
         val aliases = linkedMapOf<String, String>()
-        val files = readStyleGateway.allBackgroundImagePaths().mapNotNull { path ->
-            val source = if (path.contains(File.separator)) File(path) else appCtx.externalFiles.getFile("bg", path)
-            if (!source.isFile) return@mapNotNull null
+        val configuredPaths = listOf(
+            themeSettingsGateway.currentSettings.backgroundImageLight,
+            themeSettingsGateway.currentSettings.backgroundImageDark,
+            themeSettingsGateway.currentSettings.largeContainerBackgroundImageLight,
+            themeSettingsGateway.currentSettings.largeContainerBackgroundImageDark,
+            themeSettingsGateway.currentSettings.itemBackgroundImageLight,
+            themeSettingsGateway.currentSettings.itemBackgroundImageDark,
+        ).filterNotNull()
+        val themePackagePaths = ThemeConfigStore.configList.mapNotNull { it.backgroundImgPath }
+        val files = mutableListOf<File>()
+        fun copyPath(path: String) {
+            val normalizedPath = path.trim()
+            // Content URI 需要持久化权限和流式复制，当前 ZIP 文件资源协议不支持时安全跳过。
+            if (normalizedPath.startsWith("content://", ignoreCase = true)) return
+            val isAbsolutePath = normalizedPath.startsWith("/") ||
+                normalizedPath.matches(Regex("^[A-Za-z]:[\\\\/].*"))
+            val source = if (isAbsolutePath) {
+                File(normalizedPath)
+            } else {
+                appCtx.externalFiles.getFile("bg", normalizedPath)
+            }
+            if (!source.isFile) return
             val hash = source.sha256()
-            val extension = source.extension.takeIf { it.isNotBlank() }?.let { ".${it.lowercase(Locale.ROOT)}" } ?: ""
+            val extension = source.extension.takeIf { it.isNotBlank() }
+                ?.let { ".${it.lowercase(Locale.ROOT)}" } ?: ""
             val target = File(targetDir, "$hash$extension")
             if (!target.exists()) source.copyTo(target, overwrite = false)
             aliases[source.name] = "assets/background/${target.name}"
-            target
+            if (files.none { it.name == target.name }) files += target
         }
+        (readStyleGateway.allBackgroundImagePaths() + configuredPaths + themePackagePaths)
+            .distinct().forEach(::copyPath)
         return files to aliases
     }
 

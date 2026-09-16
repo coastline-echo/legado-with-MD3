@@ -123,6 +123,10 @@
     <string name="restore_confirmation">確認還原嗎？</string>
     <string name="restore_message">還原成功會覆蓋原有書架。</string>
     <string name="backup_success">備份成功</string>
+    <string name="backup_success_with_config_report">備份完成。設定鍵：%1$s</string>
+    <string name="backup_config_integrity_title">備份設定完整性</string>
+    <string name="backup_config_integrity_counts">已寫入 %1$d，已忽略 %2$d，不支援 %3$d，失敗 %4$d，未設定 %5$d</string>
+    <string name="backup_webdav_upload_failed">本地備份成功，但 WebDAV 上傳失敗</string>
     <string name="backup_directory_not_selected">未選擇備份目錄，備份已取消</string>
     <string name="restore_from_local_use_backup">使用備份內容（本機）</string>
     <string name="restore_from_local_keep_application">保留應用程式內容（本機）</string>
@@ -132,6 +136,11 @@
     <string name="restore_from_network_by_category">按類別選擇（WebDAV）</string>
     <string name="restore_preview">還原預覽</string>
     <string name="restore_preview_summary">檔案：%1$d\n資源：%2$d\n警告：%3$d</string>
+    <string name="restore_category_use_backup">使用備份內容</string>
+    <string name="restore_category_keep_application">保留應用內容</string>
+    <string name="restore_category_counts">應用：%1$d  備份：%2$d</string>
+    <string name="restore_category_conflicts">衝突：%1$d</string>
+    <string name="restore_preview_category_status">空類別：%1$s\n缺失類別：%2$s\n備份忽略：%3$s\n還原忽略：%4$s</string>
     <string name="backup_sensitive_title">敏感資訊</string>
     <string name="backup_sensitive_summary">選擇要包含的敏感資訊類別</string>
     <string name="backup_sensitive_items_hint">只有勾選此類別後，才會包含其中的具體憑據。</string>
@@ -145,9 +154,10 @@
     <string name="backup_sensitive_other">其他敏感欄位</string>
     <string name="backup_sensitive_expand">展開查看具體項目</string>
     <string name="backup_sensitive_collapse">收起具體項目</string>
-    <string name="backup_restore_progress_summary">已處理：%1$d/%2$d\n警告：%3$d\n失敗：%4$d</string>
+    <string name="backup_restore_progress_summary">類別：%5$s\n已處理：%1$d/%2$d\n警告：%3$d\n失敗：%4$d</string>
     <string name="backup_stage_prepare">準備資料</string><string name="backup_stage_database">匯出資料庫</string><string name="backup_stage_resources">處理資源</string><string name="backup_stage_manifest">產生清單</string><string name="backup_stage_zip">產生 ZIP</string><string name="backup_stage_webdav">上傳 WebDAV</string><string name="restore_stage_read">讀取備份</string><string name="restore_stage_bookshelf">還原書架</string><string name="restore_stage_resources">還原資源</string><string name="restore_stage_complete">完成</string>
     <string name="backup_stage_local">寫入本機備份</string><string name="restore_stage_config">還原設定</string><string name="restore_stage_refresh">重新整理執行狀態</string>
+    <string name="restore_success_with_warnings">還原完成，但存在警告</string><string name="restore_partial">還原部分完成</string><string name="restore_failed_with_categories">以下類別還原失敗：%1$s</string><string name="restore_config_missing">已跳過設定還原：缺少 config.xml（%1$s）</string><string name="restore_config_parse_failed">已跳過設定還原：config.xml 無效（%1$s）</string>
     <string name="backup_password">備份密碼（選填）</string>
     <string name="backup_password_weak_warning">允許使用空密碼，但敏感資訊將處於弱保護狀態。</string>
     <string name="backup_fail">備份失敗\n%s</string>
@@ -854,7 +864,11 @@
     <string name="backup_to_local">備份至本地</string>
     <string name="backup_to_network">備份至網絡</string>
     <string name="restore_summary">選擇從本地或網絡恢復備份</string>
-    <string name="import_old_summary">選擇舊版備份文件夾</string>
+    <string name="import_old_summary">選擇舊版備份文件或文件夾</string>
+    <string name="import_old_not_selected">未選擇舊版資料，導入已取消</string>
+    <string name="import_old_no_files">未找到舊版備份文件</string>
+    <string name="import_old_unsupported">不支援的舊版備份文件</string>
+    <string name="import_old_result">處理文件：%1$d，導入項目：%2$d，失敗：%3$d，跳過：%4$d</string>
     <string name="enabled">已啓用</string>
     <string name="disabled">已禁用</string>
     <string name="enabled_explore">已啟用發現</string>

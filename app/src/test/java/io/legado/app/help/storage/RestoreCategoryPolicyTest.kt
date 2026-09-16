@@ -18,9 +18,9 @@ class RestoreCategoryPolicyTest {
     }
 
     @Test
-    fun `explicit empty category clears only in overwrite mode`() {
+    fun `explicit empty category never clears application implicitly`() {
         val input = RestoreCategoryInput("bookshelf", backupPresent = true, applicationItemIds = setOf("a"))
-        assertEquals(true, RestoreCategoryPlanner.plan(input, RestoreMode.USE_BACKUP).clearApplication)
+        assertEquals(false, RestoreCategoryPlanner.plan(input, RestoreMode.USE_BACKUP).clearApplication)
         assertEquals(false, RestoreCategoryPlanner.plan(input, RestoreMode.KEEP_APPLICATION).clearApplication)
     }
 
@@ -32,5 +32,47 @@ class RestoreCategoryPolicyTest {
         )
         assertEquals(true, plan.skippedByIgnore)
         assertEquals(emptySet<String>(), plan.importItemIds)
+    }
+
+    @Test
+    fun `category mode resolves each category independently`() {
+        val plans = RestoreCategoryPlanner.planByCategory(
+            inputs = listOf(
+                RestoreCategoryInput(
+                    category = "bookshelf",
+                    backupPresent = true,
+                    backupItemIds = setOf("backup"),
+                    applicationItemIds = setOf("application"),
+                ),
+                RestoreCategoryInput(
+                    category = "bookSource",
+                    backupPresent = true,
+                    backupItemIds = setOf("source"),
+                    applicationItemIds = emptySet(),
+                ),
+            ),
+            modes = mapOf(
+                "bookshelf" to RestoreMode.KEEP_APPLICATION,
+                "bookSource" to RestoreMode.USE_BACKUP,
+            ),
+        )
+        assertEquals(setOf("backup"), plans.single { it.category == "bookshelf" }.importItemIds)
+        assertEquals(setOf("source"), plans.single { it.category == "bookSource" }.importItemIds)
+        assertEquals(setOf("application"), plans.single { it.category == "bookshelf" }.deleteItemIds)
+    }
+
+    @Test
+    fun `overwrite plan deletes application-only identities`() {
+        val plan = RestoreCategoryPlanner.plan(
+            RestoreCategoryInput(
+                category = "bookSource",
+                backupPresent = true,
+                backupItemIds = setOf("backup"),
+                applicationItemIds = setOf("backup", "application-only"),
+            ),
+            RestoreMode.USE_BACKUP,
+        )
+        assertEquals(setOf("application-only"), plan.deleteItemIds)
+        assertEquals(setOf("backup"), plan.importItemIds)
     }
 }

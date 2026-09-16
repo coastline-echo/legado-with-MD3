@@ -45,9 +45,15 @@ object RestoreCategoryPlanner {
             RestoreMode.USE_BACKUP -> RestoreCategoryPlan(
                 category = input.category,
                 mode = mode,
-                clearApplication = input.backupItemIds.isEmpty(),
+                // 空备份只表示“本次没有可导入数据”，不再隐式清空应用数据。
+                // 清空必须由未来显式的用户操作/确认触发。
+                clearApplication = false,
                 importItemIds = input.backupItemIds,
-                deleteItemIds = input.applicationItemIds - input.backupItemIds,
+                deleteItemIds = if (input.backupItemIds.isEmpty()) {
+                    emptySet()
+                } else {
+                    input.applicationItemIds - input.backupItemIds
+                },
                 skippedByIgnore = false,
             )
             RestoreMode.KEEP_APPLICATION -> RestoreCategoryPlan(

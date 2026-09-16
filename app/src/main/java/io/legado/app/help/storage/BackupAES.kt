@@ -6,6 +6,11 @@ import io.legado.app.utils.MD5Utils
 
 class BackupAES(overridePassword: String? = null) : SymmetricCryptoAndroid(
     "AES",
-    MD5Utils.md5Encode((overridePassword ?: LocalConfig.backupPassword ?: LocalConfig.password).orEmpty())
-        .encodeToByteArray(0, 16)
+    MD5Utils.md5Encode(
+        BackupPasswordResolver.resolve(
+            explicitPassword = overridePassword,
+            storedBackupPassword = LocalConfig.backupPassword,
+            applicationPassword = LocalConfig.password,
+        ).password,
+    ).encodeToByteArray(0, 16),
 )

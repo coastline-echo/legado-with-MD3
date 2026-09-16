@@ -163,6 +163,10 @@
     <string name="restore_confirmation">确认恢复吗？</string>
     <string name="restore_message">恢复书架会覆盖现有书架。</string>
     <string name="backup_success">备份成功</string>
+    <string name="backup_success_with_config_report">备份完成。配置键：%1$s</string>
+    <string name="backup_config_integrity_title">备份配置完整性</string>
+    <string name="backup_config_integrity_counts">已写入 %1$d，已忽略 %2$d，不支持 %3$d，失败 %4$d，未设置 %5$d</string>
+    <string name="backup_webdav_upload_failed">本地备份成功，但 WebDAV 上传失败</string>
     <string name="backup_directory_not_selected">未选择备份目录，备份已取消</string>
     <string name="restore_from_local_use_backup">使用备份内容（本地）</string>
     <string name="restore_from_local_keep_application">保留应用内容（本地）</string>
@@ -172,6 +176,11 @@
     <string name="restore_from_network_by_category">按类别选择（WebDAV）</string>
     <string name="restore_preview">恢复预览</string>
     <string name="restore_preview_summary">文件：%1$d\n资源：%2$d\n警告：%3$d</string>
+    <string name="restore_category_use_backup">使用备份内容</string>
+    <string name="restore_category_keep_application">保留应用内容</string>
+    <string name="restore_category_counts">应用：%1$d  备份：%2$d</string>
+    <string name="restore_category_conflicts">冲突：%1$d</string>
+    <string name="restore_preview_category_status">空类别：%1$s\n缺失类别：%2$s\n备份忽略：%3$s\n恢复忽略：%4$s</string>
     <string name="backup_sensitive_title">敏感信息</string>
     <string name="backup_sensitive_summary">选择要包含的敏感信息类别</string>
     <string name="backup_sensitive_items_hint">只有勾选此类别后，才会包含其中的具体凭据。</string>
@@ -185,9 +194,10 @@
     <string name="backup_sensitive_other">其他敏感字段</string>
     <string name="backup_sensitive_expand">展开查看具体项目</string>
     <string name="backup_sensitive_collapse">收起具体项目</string>
-    <string name="backup_restore_progress_summary">已处理：%1$d/%2$d\n警告：%3$d\n失败：%4$d</string>
+    <string name="backup_restore_progress_summary">类别：%5$s\n已处理：%1$d/%2$d\n警告：%3$d\n失败：%4$d</string>
     <string name="backup_stage_prepare">准备数据</string><string name="backup_stage_database">导出数据库</string><string name="backup_stage_resources">处理资源</string><string name="backup_stage_manifest">生成清单</string><string name="backup_stage_zip">生成 ZIP</string><string name="backup_stage_webdav">上传 WebDAV</string><string name="restore_stage_read">读取备份</string><string name="restore_stage_bookshelf">恢复书架</string><string name="restore_stage_resources">恢复资源</string><string name="restore_stage_complete">完成</string>
     <string name="backup_stage_local">写入本地备份</string><string name="restore_stage_config">恢复配置</string><string name="restore_stage_refresh">刷新运行时状态</string>
+    <string name="restore_success_with_warnings">恢复完成，但存在警告</string><string name="restore_partial">恢复部分完成</string><string name="restore_failed_with_categories">以下类别恢复失败：%1$s</string><string name="restore_config_missing">已跳过设置恢复：缺少 config.xml（%1$s）</string><string name="restore_config_parse_failed">已跳过设置恢复：config.xml 无效（%1$s）</string>
     <string name="backup_password">备份密码（可选）</string>
     <string name="backup_password_weak_warning">允许使用空密码，但敏感信息将处于弱保护状态。</string>
     <string name="backup_fail">备份失败\n%s</string>
@@ -986,7 +996,11 @@
     <string name="backup_to_local">备份至本地</string>
     <string name="backup_to_network">备份至网络</string>
     <string name="restore_summary">选择从本地或网络恢复备份</string>
-    <string name="import_old_summary">选择旧版备份文件夹</string>
+    <string name="import_old_summary">选择旧版备份文件或文件夹</string>
+    <string name="import_old_not_selected">未选择旧版数据，导入已取消</string>
+    <string name="import_old_no_files">未找到旧版备份文件</string>
+    <string name="import_old_unsupported">不支持的旧版备份文件</string>
+    <string name="import_old_result">处理文件：%1$d，导入条目：%2$d，失败：%3$d，跳过：%4$d</string>
     <string name="enabled">已启用</string>
     <string name="disabled">已禁用</string>
     <string name="enabled_explore">已启用发现</string>

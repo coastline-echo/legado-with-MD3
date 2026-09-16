@@ -2,6 +2,13 @@ package io.legado.app.help.storage
 
 import io.legado.app.constant.PreferKey
 
+internal data class RestoreConfigNormalization(
+    val values: Map<String, Any>,
+    val ignoredKeys: Set<String> = emptySet(),
+    val unsupportedKeys: Set<String> = emptySet(),
+    val decryptionFailedKeys: Set<String> = emptySet(),
+)
+
 /**
  * 把 config.xml 解析出的原始键值规整为可直接批量写入设置存储的 map（纯函数，便于 JVM 单测）：
  * - [PreferKey.webDavPassword]：AES 解密；解密失败时本地无密码则保留原文，否则丢弃；
@@ -16,12 +23,32 @@ internal fun normalizeConfigMap(
     hasLocalWebDavPassword: Boolean,
     allowLegacyPlaintextFallback: Boolean = true,
 ): Map<String, Any> {
+    return normalizeConfigMapWithReport(
+        map, keyIsNotIgnore, decryptWebDavPassword, hasLocalWebDavPassword, allowLegacyPlaintextFallback,
+    ).values
+}
+
+internal fun normalizeConfigMapWithReport(
+    map: Map<String, Any?>,
+    keyIsNotIgnore: (String) -> Boolean,
+    decryptWebDavPassword: (String) -> String?,
+    hasLocalWebDavPassword: Boolean,
+    allowLegacyPlaintextFallback: Boolean = true,
+): RestoreConfigNormalization {
     val finalMap = mutableMapOf<String, Any>()
+    val ignoredKeys = linkedSetOf<String>()
+    val unsupportedKeys = linkedSetOf<String>()
+    val decryptionFailedKeys = linkedSetOf<String>()
     map.forEach { (key, value) ->
-        if (!keyIsNotIgnore(key)) return@forEach
+        if (!keyIsNotIgnore(key)) {
+            ignoredKeys += key
+            return@forEach
+        }
         when (key) {
             PreferKey.webDavPassword -> {
-                val password = decryptWebDavPassword(value.toString())
+                val decrypted = decryptWebDavPassword(value.toString())
+                if (decrypted == null) decryptionFailedKeys += key
+                val password = decrypted
                     ?: value.toString().takeIf { allowLegacyPlaintextFallback && !hasLocalWebDavPassword }
                 password?.let { finalMap[key] = it }
             }
@@ -30,6 +57,7 @@ internal fun normalizeConfigMap(
                 is Double -> finalMap[key] = value.toFloat()
                 is Int, is Boolean, is Long, is Float, is String,
                 is Set<*> -> finalMap[key] = value
+                else -> unsupportedKeys += key
             }
         }
     }
@@ -44,5 +72,5 @@ internal fun normalizeConfigMap(
             }
         }
     }
-    return finalMap
+    return RestoreConfigNormalization(finalMap, ignoredKeys, unsupportedKeys, decryptionFailedKeys)
 }

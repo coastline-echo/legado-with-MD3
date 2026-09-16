@@ -21,6 +21,7 @@ class BackupManifestTest {
                 files = listOf(file),
                 categories = mapOf("settings" to listOf("config.xml")),
                 ignoredCategories = setOf("theme"),
+                restoreIgnoredCategories = setOf("readConfig"),
                 configKeys = setOf("mainNavigationOrder"),
             )
 
@@ -33,6 +34,7 @@ class BackupManifestTest {
             )
             assertEquals(listOf("config.xml"), manifest.categories["settings"])
             assertTrue("theme" in manifest.ignoredCategories)
+            assertTrue("readConfig" in manifest.restoreIgnoredCategories)
             assertTrue("mainNavigationOrder" in manifest.configKeys)
         } finally {
             root.deleteRecursively()

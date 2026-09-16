@@ -41,9 +41,9 @@ class WebDavBackupUseCase(
         webDavBackupGateway.restore(name)
     }
 
-    suspend fun restore(name: String, mode: RestoreMode, backupPassword: String? = null) {
+    suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null) {
         webDavBackupGateway.syncConfig()
-        webDavBackupGateway.restore(name, mode, backupPassword)
+        webDavBackupGateway.restore(name, mode, categoryModes, backupPassword)
     }
 
     suspend fun preview(name: String): RestorePreview {

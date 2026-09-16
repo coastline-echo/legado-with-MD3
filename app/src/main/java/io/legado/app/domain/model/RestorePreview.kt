@@ -9,4 +9,12 @@ data class RestorePreview(
     val warnings: List<String>,
     val sensitiveIncluded: Boolean = false,
     val weakProtection: Boolean = false,
+    val sensitiveItems: Set<String> = emptySet(),
+    val applicationCounts: Map<String, Int> = emptyMap(),
+    val emptyCategories: Set<String> = emptySet(),
+    val missingCategories: Set<String> = emptySet(),
+    val ignoredCategories: Set<String> = emptySet(),
+    val backupIgnoredCategories: Set<String> = emptySet(),
+    val restoreIgnoredCategories: Set<String> = emptySet(),
+    val conflictCounts: Map<String, Int> = emptyMap(),
 )

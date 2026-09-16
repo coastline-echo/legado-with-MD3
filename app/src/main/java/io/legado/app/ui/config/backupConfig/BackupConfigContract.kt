@@ -7,6 +7,7 @@ import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
 import io.legado.app.domain.model.BackupSensitiveCategory
 import io.legado.app.help.storage.BackupRestoreProgress
+import io.legado.app.domain.model.BackupRestoreResult
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -22,6 +23,7 @@ data class BackupConfigUiState(
     val backupDbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val sensitiveItems: ImmutableList<BackupSensitiveItem> = persistentListOf(),
     val backupPassword: String = "",
+    val lastResult: BackupRestoreResult? = null,
 )
 
 @Stable
@@ -37,6 +39,7 @@ data class BackupSensitiveItem(
     val title: String,
     val checked: Boolean,
     val expanded: Boolean = false,
+    val details: ImmutableList<String> = persistentListOf(),
 )
 
 sealed interface BackupConfigSheet {
@@ -48,6 +51,7 @@ sealed interface BackupConfigSheet {
     data object IgnoreRestoreItems : BackupConfigSheet
     data object IgnoreBackupItems : BackupConfigSheet
     data object SensitiveItems : BackupConfigSheet
+    data object ImportOldData : BackupConfigSheet
 }
 
 sealed interface BackupConfigDialog {
@@ -65,10 +69,15 @@ sealed interface BackupConfigDialog {
         val networkName: String? = null,
         val backupPassword: String = "",
         val selectedCategories: Set<String> = emptySet(),
+        val categoryModes: Map<String, RestoreMode> = emptyMap(),
     ) : BackupConfigDialog
     data class Loading(
         @StringRes val titleRes: Int,
         val progress: BackupRestoreProgress? = null,
+    ) : BackupConfigDialog
+    data class ConfigIntegrityReport(
+        val result: BackupRestoreResult,
+        val expanded: Boolean = false,
     ) : BackupConfigDialog
 }
 
@@ -105,6 +114,7 @@ sealed interface BackupConfigIntent {
     data object SaveSensitiveItems : BackupConfigIntent
     data class SetBackupPassword(val value: String) : BackupConfigIntent
     data object DismissDialog : BackupConfigIntent
+    data object ToggleConfigReportDetails : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent
     data class BackupDirectorySelected(val path: String, val runBackup: Boolean) : BackupConfigIntent
@@ -116,18 +126,22 @@ sealed interface BackupConfigIntent {
     data class ConfirmRestorePreview(val uri: String) : BackupConfigIntent
     data class ConfirmNetworkRestorePreview(val name: String) : BackupConfigIntent
     data class ToggleRestorePreviewCategory(val category: String) : BackupConfigIntent
+    data class SetRestorePreviewCategoryMode(val category: String, val mode: RestoreMode) : BackupConfigIntent
     data class SetRestoreBackupPassword(val value: String) : BackupConfigIntent
     data class RequestNetworkRestore(val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data class RestoreNetwork(val name: String, val mode: RestoreMode = RestoreMode.KEEP_APPLICATION) : BackupConfigIntent
     data object ConfirmLocalRestoreFallback : BackupConfigIntent
     data object RequestImportOldData : BackupConfigIntent
+    data object SelectOldDataFile : BackupConfigIntent
+    data object SelectOldDataDirectory : BackupConfigIntent
 }
 
 sealed interface BackupConfigEffect {
     data object LaunchBackupDirectoryPicker : BackupConfigEffect
     data object LaunchBackupAndRunDirectoryPicker : BackupConfigEffect
     data object LaunchRestoreFilePicker : BackupConfigEffect
-    data object LaunchImportOldDataPicker : BackupConfigEffect
+    data object LaunchImportOldDataFilePicker : BackupConfigEffect
+    data object LaunchImportOldDataDirectoryPicker : BackupConfigEffect
     data object BackupDirectorySelectionCancelled : BackupConfigEffect
     data class RequestStoragePermission(val path: String, val mode: String) : BackupConfigEffect
     data class ShowMessage(@StringRes val messageRes: Int, val argument: String? = null) : BackupConfigEffect

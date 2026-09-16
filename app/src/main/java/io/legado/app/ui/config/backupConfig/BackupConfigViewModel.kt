@@ -10,7 +10,10 @@ import io.legado.app.domain.usecase.BackupRestoreUseCase
 import io.legado.app.domain.usecase.WebDavBackupUseCase
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.BackupSensitiveCategory
+import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreProgressBus
+import io.legado.app.help.storage.BackupRestoreResultBus
+import io.legado.app.domain.model.BackupRestoreOutcome
 import io.legado.app.utils.isContentScheme
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +33,9 @@ class BackupConfigViewModel(
     private val _uiState = MutableStateFlow(
         BackupConfigUiState(
             settings = settingsGateway.currentSettings,
+            activeSheet = io.legado.app.help.config.LocalConfig.backupSensitiveNoticeShown
+                .takeIf { it == false }
+                ?.let { BackupConfigSheet.SensitiveItems },
             ignoreItems = loadIgnoreItems(),
             backupIgnoreItems = loadBackupIgnoreItems(),
             dbIgnoreItems = loadDbIgnoreItems(),
@@ -110,6 +116,11 @@ class BackupConfigViewModel(
             }
             BackupConfigIntent.SaveSensitiveItems -> saveSensitiveItems()
             is BackupConfigIntent.SetBackupPassword -> _uiState.update { it.copy(backupPassword = intent.value) }
+            BackupConfigIntent.ToggleConfigReportDetails -> _uiState.update { state ->
+                val dialog = state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport
+                    ?: return@update state
+                state.copy(activeDialog = dialog.copy(expanded = !dialog.expanded))
+            }
             BackupConfigIntent.DismissDialog -> _uiState.update { it.copy(activeDialog = null) }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
@@ -131,6 +142,10 @@ class BackupConfigViewModel(
                 }
                 state.copy(activeDialog = dialog.copy(selectedCategories = selected))
             }
+            is BackupConfigIntent.SetRestorePreviewCategoryMode -> _uiState.update { state ->
+                val dialog = state.activeDialog as? BackupConfigDialog.RestorePreview ?: return@update state
+                state.copy(activeDialog = dialog.copy(categoryModes = dialog.categoryModes + (intent.category to intent.mode)))
+            }
             is BackupConfigIntent.SetRestoreBackupPassword -> _uiState.update { state ->
                 val dialog = state.activeDialog as? BackupConfigDialog.RestorePreview ?: return@update state
                 state.copy(activeDialog = dialog.copy(backupPassword = intent.value))
@@ -138,8 +153,17 @@ class BackupConfigViewModel(
             is BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups(intent.mode)
             is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name, selectedRestoreMode)
             BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore(RestoreMode.KEEP_APPLICATION)
-            BackupConfigIntent.RequestImportOldData ->
-                _effects.tryEmit(BackupConfigEffect.LaunchImportOldDataPicker)
+            BackupConfigIntent.RequestImportOldData -> _uiState.update {
+                it.copy(activeSheet = BackupConfigSheet.ImportOldData)
+            }
+            BackupConfigIntent.SelectOldDataFile -> {
+                _uiState.update { it.copy(activeSheet = null) }
+                _effects.tryEmit(BackupConfigEffect.LaunchImportOldDataFilePicker)
+            }
+            BackupConfigIntent.SelectOldDataDirectory -> {
+                _uiState.update { it.copy(activeSheet = null) }
+                _effects.tryEmit(BackupConfigEffect.LaunchImportOldDataDirectoryPicker)
+            }
         }
     }
 
@@ -311,6 +335,11 @@ class BackupConfigViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            BackupRestoreResultBus.events.collect { result ->
+                _uiState.update { it.copy(lastResult = result) }
+            }
+        }
         if (path.isNotEmpty() && !path.isContentScheme()) {
             _effects.tryEmit(BackupConfigEffect.RequestStoragePermission(path, mode))
         } else {
@@ -321,11 +350,16 @@ class BackupConfigViewModel(
     private fun performBackup(path: String, mode: String) {
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.backup)) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { backupRestoreUseCase.backup(path, mode) }
+                runCatching { backupRestoreUseCase.backup(path, mode) }
                 .onSuccess {
                     withContext(Dispatchers.Main) {
-                        _uiState.update { it.copy(activeDialog = null) }
-                        _effects.tryEmit(BackupConfigEffect.ShowMessage(R.string.backup_success))
+                        val result = BackupRestoreResultBus.latest
+                        if (result == null) {
+                            _uiState.update { it.copy(activeDialog = null) }
+                            _effects.tryEmit(BackupConfigEffect.ShowMessage(R.string.backup_success))
+                        } else {
+                            _uiState.update { it.copy(activeDialog = BackupConfigDialog.ConfigIntegrityReport(result)) }
+                        }
                     }
                 }
                 .onFailure { error ->
@@ -350,20 +384,22 @@ class BackupConfigViewModel(
     private fun restoreLocal(uri: String) {
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
-            val preview = backupRestoreUseCase.previewLocal(Uri.parse(uri).toString())
-            withContext(Dispatchers.Main) {
-                _uiState.update {
-                    it.copy(
-                        activeDialog = BackupConfigDialog.RestorePreview(
-                            uri = uri,
-                            preview = preview,
-                            mode = selectedRestoreMode,
-                            selectedCategories = preview.categories.keys,
-                            backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
+            runCatching { backupRestoreUseCase.previewLocal(Uri.parse(uri).toString()) }
+                .onSuccess { preview -> withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            activeDialog = BackupConfigDialog.RestorePreview(
+                                uri = uri,
+                                preview = preview,
+                                mode = selectedRestoreMode,
+                                selectedCategories = preview.categories.keys,
+                                categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
+                                backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
+                            )
                         )
-                    )
-                }
-            }
+                    }
+                } }
+                .onFailure { finishRestoreFailure(it.localizedMessage) }
         }
     }
 
@@ -371,10 +407,11 @@ class BackupConfigViewModel(
         val selected = _uiState.value.sensitiveItems.filter { it.checked }
             .map { it.category }.toSet()
         io.legado.app.help.storage.BackupConfig.backupPassword =
-            _uiState.value.backupPassword.takeIf { it.isNotEmpty() }
+            _uiState.value.backupPassword
         io.legado.app.help.storage.BackupConfig.saveSensitiveSelection(
             io.legado.app.domain.model.BackupSensitiveSelection(selected = selected)
         )
+        io.legado.app.help.config.LocalConfig.backupSensitiveNoticeShown = true
         _uiState.update { it.copy(activeSheet = null) }
     }
 
@@ -389,6 +426,7 @@ class BackupConfigViewModel(
                     Uri.parse(uri).toString(),
                     selectedRestoreMode,
                     categories,
+                    dialog?.categoryModes.orEmpty(),
                     backupPassword,
                 )
             }
@@ -447,6 +485,7 @@ class BackupConfigViewModel(
                                 mode = selectedRestoreMode,
                                 networkName = name,
                                 selectedCategories = preview.categories.keys,
+                                categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
                                 backupPassword = io.legado.app.help.storage.BackupConfig.backupPassword.orEmpty(),
                             )
                         )
@@ -458,17 +497,37 @@ class BackupConfigViewModel(
     }
 
     private fun performRestoreNetwork(name: String) {
-        val password = (_uiState.value.activeDialog as? BackupConfigDialog.RestorePreview)?.backupPassword.orEmpty()
+        val previewDialog = _uiState.value.activeDialog as? BackupConfigDialog.RestorePreview
+        val password = previewDialog?.backupPassword.orEmpty()
+        val categoryModes = previewDialog?.categoryModes.orEmpty()
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { webDavBackupUseCase.restore(name, selectedRestoreMode, password) }
+            runCatching { webDavBackupUseCase.restore(name, selectedRestoreMode, categoryModes, password) }
                 .fold(onSuccess = { finishRestoreSuccess() }, onFailure = { finishRestoreFailure(it.localizedMessage, webDav = true) })
         }
     }
 
     private suspend fun finishRestoreSuccess() = withContext(Dispatchers.Main) {
+        val result = BackupRestoreResultBus.latest ?: _uiState.value.lastResult
+        val details = result?.failedCategoryCounts
+            ?.entries
+            ?.joinToString { (category, count) -> "$category($count)" }
+            ?.takeUnless { it.isNullOrBlank() }
+            ?: result?.failedCategories?.joinToString().takeUnless { it.isNullOrBlank() }
         _uiState.update { it.copy(activeDialog = null) }
-        _effects.tryEmit(BackupConfigEffect.ShowMessage(R.string.restore_success))
+        _effects.tryEmit(
+            BackupConfigEffect.ShowMessage(
+                when {
+                    result?.configFileMissing == true -> R.string.restore_config_missing
+                    result?.configFileParseFailed == true -> R.string.restore_config_parse_failed
+                    result?.outcome == BackupRestoreOutcome.PARTIAL -> R.string.restore_partial
+                    result?.outcome == BackupRestoreOutcome.FAILED -> R.string.restore_failed_with_categories
+                    result?.outcome == BackupRestoreOutcome.SUCCESS_WITH_WARNINGS -> R.string.restore_success_with_warnings
+                    else -> R.string.restore_success
+                },
+                details.orEmpty(),
+            )
+        )
     }
 
     private suspend fun finishRestoreFailure(message: String?, webDav: Boolean = false) =
@@ -530,7 +589,23 @@ class BackupConfigViewModel(
                 category = category,
                 title = category.name,
                 checked = io.legado.app.help.storage.BackupConfig.sensitiveSelection.includes(category),
+                details = sensitiveDetails(category).toImmutableList(),
             )
         }.toImmutableList()
+
+        /** 展开敏感类别时只展示稳定标识，不展示密码、Cookie 等原文。 */
+        private fun sensitiveDetails(category: BackupSensitiveCategory): List<String> = when (category) {
+            BackupSensitiveCategory.SERVER_CREDENTIALS -> Backup.sensitiveItemIdentifiers(category)
+            BackupSensitiveCategory.BOOK_SOURCE_AUTH,
+            BackupSensitiveCategory.REQUEST_HEADERS ->
+                Backup.sensitiveItemIdentifiers(category)
+            BackupSensitiveCategory.RSS_AUTH ->
+                Backup.sensitiveItemIdentifiers(category)
+            BackupSensitiveCategory.TTS_API_KEYS ->
+                Backup.sensitiveItemIdentifiers(category)
+            BackupSensitiveCategory.WEBDAV_CREDENTIALS -> listOf("webDavPassword")
+            BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS -> listOf("directLinkUploadRule")
+            BackupSensitiveCategory.OTHER -> emptyList()
+        }
     }
 }

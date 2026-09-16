@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarHost
@@ -36,6 +37,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
+import io.legado.app.utils.toastOnUi
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -108,8 +110,39 @@ fun BackupConfigRouteScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let { viewModel.onIntent(BackupConfigIntent.RestoreLocal(it.toString())) } }
     val importOldLauncher = rememberLauncherForActivityResult(
+        // 旧版导入既支持目录也支持单文件；文件入口使用 OpenDocument，避免
+        // 将文件 URI 错当成 tree URI 导致 DocumentFile 读取失败。
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) context.toastOnUi(context.getString(R.string.import_old_not_selected))
+        else ImportOldData.importUri(context, uri).also { result ->
+            context.toastOnUi(
+                context.getString(
+                    R.string.import_old_result,
+                    result.processedFiles,
+                    result.importedItems,
+                    result.failedFiles,
+                    result.skippedFiles,
+                )
+            )
+        }
+    }
+    val importOldDirectoryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
-    ) { uri -> uri?.let { ImportOldData.importUri(context, it) } }
+    ) { uri ->
+        if (uri == null) context.toastOnUi(context.getString(R.string.import_old_not_selected))
+        else ImportOldData.importUri(context, uri).also { result ->
+            context.toastOnUi(
+                context.getString(
+                    R.string.import_old_result,
+                    result.processedFiles,
+                    result.importedItems,
+                    result.failedFiles,
+                    result.skippedFiles,
+                )
+            )
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
@@ -119,7 +152,10 @@ fun BackupConfigRouteScreen(
                     backupAndSelectLauncher.launch(null)
                 BackupConfigEffect.LaunchRestoreFilePicker ->
                     restoreFileLauncher.launch(arrayOf("application/zip"))
-                BackupConfigEffect.LaunchImportOldDataPicker -> importOldLauncher.launch(null)
+                BackupConfigEffect.LaunchImportOldDataFilePicker ->
+                    importOldLauncher.launch(arrayOf("application/zip", "application/json", "text/plain", "*/*"))
+                BackupConfigEffect.LaunchImportOldDataDirectoryPicker ->
+                    importOldDirectoryLauncher.launch(null)
                 BackupConfigEffect.BackupDirectorySelectionCancelled ->
                     snackbarHostState.showSnackbar(context.getString(R.string.backup_directory_not_selected))
                 is BackupConfigEffect.RequestStoragePermission -> {
@@ -396,6 +432,12 @@ private fun BackupConfigSheets(
         onConfirm = { onIntent(BackupConfigIntent.SaveBackupIgnoreItems) },
         onDismissRequest = { onIntent(BackupConfigIntent.SaveBackupIgnoreItems) },
     )
+    LegacyImportOptionSheet(
+        show = state.activeSheet == BackupConfigSheet.ImportOldData,
+        onDismissRequest = { onIntent(BackupConfigIntent.DismissSheet) },
+        onSelectFile = { onIntent(BackupConfigIntent.SelectOldDataFile) },
+        onSelectDirectory = { onIntent(BackupConfigIntent.SelectOldDataDirectory) },
+    )
     SensitiveItemsSheet(
         show = state.activeSheet == BackupConfigSheet.SensitiveItems,
         items = state.sensitiveItems,
@@ -427,8 +469,15 @@ private fun SensitiveItemsSheet(
             MediumTonalButton(onClick = onConfirm, icon = Icons.Default.Save, contentDescription = stringResource(R.string.save))
         },
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         val passwordPolicy = BackupPasswordPolicyResolver.resolve(
-            backupPassword
+            backupPassword,
+            explicitlyConfigured = io.legado.app.help.storage.BackupConfig.backupPassword != null ||
+                backupPassword.isNotEmpty(),
         )
         AppTextField(
             value = backupPassword,
@@ -458,11 +507,21 @@ private fun SensitiveItemsSheet(
                     .clickable { onExpand(item.category) },
             )
             if (item.expanded) {
-                androidx.compose.material3.Text(
-                    text = stringResource(R.string.backup_sensitive_items_hint),
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-                )
+                if (item.details.isEmpty()) {
+                    androidx.compose.material3.Text(
+                        text = stringResource(R.string.backup_sensitive_items_hint),
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    )
+                } else {
+                    item.details.forEach { detail ->
+                        androidx.compose.material3.Text(
+                            text = detail,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                        )
+                    }
+                }
             }
+        }
         }
     }
 }
@@ -625,8 +684,71 @@ private fun BackupConfigDialogs(
         title = loading?.progress?.stage?.localizedTitle()
             ?: loading?.let { stringResource(it.titleRes) }.orEmpty(),
         text = loading?.progress?.let {
-            stringResource(R.string.backup_restore_progress_summary, it.current, it.total, it.warnings, it.failures)
+            stringResource(
+                R.string.backup_restore_progress_summary,
+                it.current,
+                it.total,
+                it.warnings,
+                it.failures,
+                it.category.orEmpty(),
+            )
         },
+        content = {
+            loading?.progress?.failedCategoryCounts
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { counts ->
+                    Text(
+                        text = counts.entries.joinToString { (category, count) -> "$category($count)" },
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+        },
+    )
+
+    val integrity = dialog as? BackupConfigDialog.ConfigIntegrityReport
+    AppAlertDialog(
+        show = integrity != null,
+        onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
+        title = stringResource(R.string.backup_config_integrity_title),
+        text = integrity?.let {
+            stringResource(
+                R.string.backup_config_integrity_counts,
+                it.result.writtenConfigKeys,
+                it.result.ignoredConfigKeys,
+                it.result.unsupportedConfigKeys,
+                it.result.failedConfigKeys,
+                it.result.notSetConfigKeys,
+            )
+        }.orEmpty(),
+        content = {
+            integrity?.let { report ->
+                if (report.result.webDavUploadFailed) {
+                    Text(
+                        text = stringResource(R.string.backup_webdav_upload_failed),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                Text(
+                    text = if (report.expanded) stringResource(R.string.backup_sensitive_collapse)
+                    else stringResource(R.string.backup_sensitive_expand),
+                    modifier = Modifier.clickable {
+                        onIntent(BackupConfigIntent.ToggleConfigReportDetails)
+                    },
+                )
+                if (report.expanded) {
+                    listOf(
+                        report.result.failedConfigKeyNames,
+                        report.result.notSetConfigKeyNames,
+                        report.result.unsupportedConfigKeyNames,
+                        report.result.ignoredConfigKeyNames,
+                    ).flatten().forEach { key ->
+                        Text(text = key, modifier = Modifier.padding(vertical = 2.dp))
+                    }
+                }
+            }
+        },
+        confirmText = stringResource(R.string.ok),
+        onConfirm = { onIntent(BackupConfigIntent.DismissDialog) },
     )
 
     val preview = dialog as? BackupConfigDialog.RestorePreview
@@ -643,6 +765,29 @@ private fun BackupConfigDialogs(
             )
         }.orEmpty(),
         content = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+            if (preview != null) {
+                val empty = preview.preview.emptyCategories
+                val missing = preview.preview.missingCategories
+                val backupIgnored = preview.preview.backupIgnoredCategories
+                val restoreIgnored = preview.preview.restoreIgnoredCategories
+                if (empty.isNotEmpty() || missing.isNotEmpty() || backupIgnored.isNotEmpty() || restoreIgnored.isNotEmpty()) {
+                    Text(
+                        text = stringResource(
+                            R.string.restore_preview_category_status,
+                            empty.joinToString(),
+                            missing.joinToString(),
+                            backupIgnored.joinToString(),
+                            restoreIgnored.joinToString(),
+                        ),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+            }
             if (preview?.preview?.sensitiveIncluded == true) {
                 AppTextField(
                     value = preview.backupPassword,
@@ -650,15 +795,65 @@ private fun BackupConfigDialogs(
                     label = stringResource(R.string.backup_password),
                     backgroundColor = LegadoTheme.colorScheme.surface,
                 )
+                preview.preview.sensitiveItems.filterNot { it in io.legado.app.domain.model.BackupSensitiveCategory.entries.map { category -> category.name } }
+                    .forEach { item ->
+                        androidx.compose.material3.Text(
+                            text = item,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                        )
+                    }
             }
             if (preview?.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY) {
-                preview.selectedCategories.forEach { category ->
+                // 可选类别来自备份预览；不能来自当前已选集合，否则取消一次后
+                // 该行会消失，用户无法重新勾选。
+                (preview.preview.categories.keys + preview.preview.missingCategories)
+                    .distinct().sorted().forEach { category ->
                     CheckboxItem(
                         title = category,
                         checked = category in preview.selectedCategories,
                         onCheckedChange = { onIntent(BackupConfigIntent.ToggleRestorePreviewCategory(category)) },
                     )
+                    androidx.compose.material3.Text(
+                        text = stringResource(
+                            R.string.restore_category_counts,
+                            preview.preview.applicationCounts[category] ?: 0,
+                            preview.preview.categories[category] ?: 0,
+                        ),
+                        modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
+                    )
+                    val conflicts = preview.preview.conflictCounts[category] ?: 0
+                    if (conflicts > 0) {
+                        androidx.compose.material3.Text(
+                            text = stringResource(R.string.restore_category_conflicts, conflicts),
+                            modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
+                        )
+                    }
+                    val categoryMode = preview.categoryModes[category] ?: io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
+                    androidx.compose.material3.Text(
+                        text = stringResource(
+                            if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
+                                R.string.restore_category_use_backup
+                            } else {
+                                R.string.restore_category_keep_application
+                            }
+                        ),
+                        modifier = Modifier
+                            .padding(start = 16.dp, bottom = 6.dp)
+                            .clickable {
+                                onIntent(
+                                    BackupConfigIntent.SetRestorePreviewCategoryMode(
+                                        category,
+                                        if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
+                                            io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
+                                        } else {
+                                            io.legado.app.domain.model.RestoreMode.USE_BACKUP
+                                        },
+                                    )
+                                )
+                            },
+                    )
                 }
+            }
             }
         },
         confirmText = stringResource(R.string.restore),

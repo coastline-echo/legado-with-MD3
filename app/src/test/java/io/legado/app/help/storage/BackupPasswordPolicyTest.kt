@@ -20,4 +20,34 @@ class BackupPasswordPolicyTest {
         assertTrue(policy.passwordConfigured)
         assertEquals(false, policy.weakProtection)
     }
+
+    @Test
+    fun `explicit empty backup password stays independent and weak`() {
+        val resolution = BackupPasswordResolver.resolve(
+            explicitPassword = "",
+            storedBackupPassword = null,
+            applicationPassword = "application-secret",
+        )
+        assertEquals(BackupPasswordSource.INDEPENDENT_BACKUP_PASSWORD, resolution.source)
+        assertEquals("", resolution.password)
+        assertTrue(BackupPasswordPolicyResolver.resolve(resolution.password).weakProtection)
+    }
+
+    @Test
+    fun `unset independent password falls back to application password`() {
+        val resolution = BackupPasswordResolver.resolve(
+            explicitPassword = null,
+            storedBackupPassword = null,
+            applicationPassword = "application-secret",
+        )
+        assertEquals(BackupPasswordSource.APPLICATION_PASSWORD, resolution.source)
+        assertEquals("application-secret", resolution.password)
+    }
+
+    @Test
+    fun `explicit empty password is distinguished from unset`() {
+        val policy = BackupPasswordPolicyResolver.resolve("", explicitlyConfigured = true)
+        assertEquals(false, policy.passwordConfigured)
+        assertTrue(policy.weakProtection)
+    }
 }

@@ -5,6 +5,7 @@ enum class BackupConfigKeyStatus {
     WRITTEN,
     IGNORED,
     UNSUPPORTED,
+    WRITE_FAILED,
     NOT_SET,
 }
 
@@ -12,12 +13,14 @@ data class BackupConfigIntegrity(
     val written: Set<String>,
     val ignored: Set<String>,
     val unsupported: Set<String>,
+    val failed: Set<String>,
     val notSet: Set<String>,
 ) {
     fun status(key: String): BackupConfigKeyStatus = when {
         key in written -> BackupConfigKeyStatus.WRITTEN
         key in ignored -> BackupConfigKeyStatus.IGNORED
         key in unsupported -> BackupConfigKeyStatus.UNSUPPORTED
+        key in failed -> BackupConfigKeyStatus.WRITE_FAILED
         else -> BackupConfigKeyStatus.NOT_SET
     }
 }
@@ -30,10 +33,18 @@ object BackupConfigIntegrityChecker {
         ignored: Set<String>,
         unsupported: Set<String>,
         requiredKeys: Set<String> = emptySet(),
-    ): BackupConfigIntegrity = BackupConfigIntegrity(
-        written = written,
-        ignored = ignored,
-        unsupported = unsupported,
-        notSet = requiredKeys - snapshotKeys,
-    )
+    ): BackupConfigIntegrity {
+        // 归一化为互斥状态：写入成功优先，其次忽略、类型不支持，最后才是写入失败。
+        val normalizedWritten = written.intersect(snapshotKeys)
+        val normalizedIgnored = (ignored - normalizedWritten).intersect(snapshotKeys)
+        val normalizedUnsupported = (unsupported - normalizedWritten - normalizedIgnored).intersect(snapshotKeys)
+        val failed = snapshotKeys - normalizedWritten - normalizedIgnored - normalizedUnsupported
+        return BackupConfigIntegrity(
+            written = normalizedWritten,
+            ignored = normalizedIgnored,
+            unsupported = normalizedUnsupported,
+            failed = failed,
+            notSet = requiredKeys - snapshotKeys,
+        )
+    }
 }

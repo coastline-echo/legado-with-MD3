@@ -15,8 +15,8 @@ class BackupRestoreUseCase(
         gateway.restoreLocal(uri)
     }
 
-    suspend fun restoreLocal(uri: String, mode: RestoreMode, selectedCategories: Set<String> = emptySet(), backupPassword: String? = null) {
-        gateway.restoreLocal(uri, mode, selectedCategories, backupPassword)
+    suspend fun restoreLocal(uri: String, mode: RestoreMode, selectedCategories: Set<String> = emptySet(), categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null) {
+        gateway.restoreLocal(uri, mode, selectedCategories, categoryModes, backupPassword)
     }
 
     suspend fun previewLocal(uri: String): RestorePreview = gateway.previewLocal(uri)
