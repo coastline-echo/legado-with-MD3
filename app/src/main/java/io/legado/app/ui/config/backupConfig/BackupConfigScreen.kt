@@ -12,15 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarHost
@@ -30,11 +29,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import io.legado.app.utils.toastOnUi
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.help.storage.ImportOldData
@@ -73,6 +75,9 @@ import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.takePersistablePermissionSafely
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -84,6 +89,7 @@ fun BackupConfigRouteScreen(
     val context = LocalContext.current
     val state = viewModel.uiState.collectAsStateWithLifecycle().value
     val snackbarHostState = remember { SnackbarHostState() }
+    val importScope = rememberCoroutineScope()
     val selectBackupPathLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -115,32 +121,40 @@ fun BackupConfigRouteScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) context.toastOnUi(context.getString(R.string.import_old_not_selected))
-        else ImportOldData.importUri(context, uri).also { result ->
-            context.toastOnUi(
-                context.getString(
-                    R.string.import_old_result,
-                    result.processedFiles,
-                    result.importedItems,
-                    result.failedFiles,
-                    result.skippedFiles,
+        else importScope.launch(Dispatchers.IO) {
+            val result = runCatching { ImportOldData.importUri(context, uri) }
+                .getOrElse { ImportOldData.ImportResult(failedFiles = 1) }
+            withContext(Dispatchers.Main) {
+                context.toastOnUi(
+                    context.getString(
+                        R.string.import_old_result,
+                        result.processedFiles,
+                        result.importedItems,
+                        result.failedFiles,
+                        result.skippedFiles,
+                    )
                 )
-            )
+            }
         }
     }
     val importOldDirectoryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri == null) context.toastOnUi(context.getString(R.string.import_old_not_selected))
-        else ImportOldData.importUri(context, uri).also { result ->
-            context.toastOnUi(
-                context.getString(
-                    R.string.import_old_result,
-                    result.processedFiles,
-                    result.importedItems,
-                    result.failedFiles,
-                    result.skippedFiles,
+        else importScope.launch(Dispatchers.IO) {
+            val result = runCatching { ImportOldData.importUri(context, uri) }
+                .getOrElse { ImportOldData.ImportResult(failedFiles = 1) }
+            withContext(Dispatchers.Main) {
+                context.toastOnUi(
+                    context.getString(
+                        R.string.import_old_result,
+                        result.processedFiles,
+                        result.importedItems,
+                        result.failedFiles,
+                        result.skippedFiles,
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -152,8 +166,8 @@ fun BackupConfigRouteScreen(
                     backupAndSelectLauncher.launch(null)
                 BackupConfigEffect.LaunchRestoreFilePicker ->
                     restoreFileLauncher.launch(arrayOf("application/zip"))
-                BackupConfigEffect.LaunchImportOldDataFilePicker ->
-                    importOldLauncher.launch(arrayOf("application/zip", "application/json", "text/plain", "*/*"))
+BackupConfigEffect.LaunchImportOldDataFilePicker ->
+                    importOldLauncher.launch(arrayOf("application/zip", "application/json", "text/plain", "*/*", "application/octet-stream"))
                 BackupConfigEffect.LaunchImportOldDataDirectoryPicker ->
                     importOldDirectoryLauncher.launch(null)
                 BackupConfigEffect.BackupDirectorySelectionCancelled ->
@@ -444,7 +458,6 @@ private fun BackupConfigSheets(
         backupPassword = state.backupPassword,
         onPasswordChange = { onIntent(BackupConfigIntent.SetBackupPassword(it)) },
         onToggle = { category, value -> onIntent(BackupConfigIntent.ToggleSensitiveItem(category, value)) },
-        onExpand = { category -> onIntent(BackupConfigIntent.ToggleSensitiveExpanded(category)) },
         onConfirm = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
         onDismiss = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
     )
@@ -457,71 +470,63 @@ private fun SensitiveItemsSheet(
     backupPassword: String,
     onPasswordChange: (String) -> Unit,
     onToggle: (io.legado.app.domain.model.BackupSensitiveCategory, Boolean) -> Unit,
-    onExpand: (io.legado.app.domain.model.BackupSensitiveCategory) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismiss,
+        modifier = Modifier.height(adaptiveBackupDialogHeight(fraction = 0.60f, min = 420.dp, max = 620.dp)),
         title = stringResource(R.string.backup_sensitive_title),
         endAction = {
             MediumTonalButton(onClick = onConfirm, icon = Icons.Default.Save, contentDescription = stringResource(R.string.save))
         },
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+        LazyColumn(
+            // 单一 LazyColumn 由 bottom sheet 约束高度，避免小屏/MIUI 上 verticalScroll
+            // 子 Column 被测量为无限高度而无法消费手势。
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
         ) {
-        val passwordPolicy = BackupPasswordPolicyResolver.resolve(
-            backupPassword,
-            explicitlyConfigured = io.legado.app.help.storage.BackupConfig.backupPassword != null ||
-                backupPassword.isNotEmpty(),
-        )
-        AppTextField(
-            value = backupPassword,
-            onValueChange = onPasswordChange,
-            label = stringResource(R.string.backup_password),
-            backgroundColor = LegadoTheme.colorScheme.surface,
-        )
-        if (passwordPolicy.weakProtection) {
-            androidx.compose.material3.Text(
-                text = stringResource(R.string.backup_password_weak_warning),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-        }
-        items.forEach { item ->
-            CheckboxItem(
-                title = sensitiveCategoryTitle(item.category),
-                checked = item.checked,
-                onCheckedChange = { onToggle(item.category, it) },
-            )
-            androidx.compose.material3.Text(
-                text = stringResource(
-                    if (item.expanded) R.string.backup_sensitive_collapse
-                    else R.string.backup_sensitive_expand
-                ),
-                modifier = Modifier
-                    .padding(start = 16.dp, bottom = 4.dp)
-                    .clickable { onExpand(item.category) },
-            )
-            if (item.expanded) {
-                if (item.details.isEmpty()) {
+            item {
+                val passwordPolicy = BackupPasswordPolicyResolver.resolve(
+                    backupPassword,
+                    explicitlyConfigured = io.legado.app.help.storage.BackupConfig.backupPassword != null ||
+                        backupPassword.isNotEmpty(),
+                )
+                AppTextField(
+                    value = backupPassword,
+                    onValueChange = onPasswordChange,
+                    label = stringResource(R.string.backup_password),
+                    backgroundColor = LegadoTheme.colorScheme.surface,
+                )
+                if (passwordPolicy.weakProtection) {
                     androidx.compose.material3.Text(
-                        text = stringResource(R.string.backup_sensitive_items_hint),
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                        text = stringResource(R.string.backup_password_weak_warning),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
-                } else {
-                    item.details.forEach { detail ->
-                        androidx.compose.material3.Text(
-                            text = detail,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
-                        )
-                    }
                 }
             }
-        }
+            items(items, key = { it.category.name }) { item ->
+                CheckboxItem(
+                    title = sensitiveCategoryTitle(item.category),
+                    checked = item.checked,
+                    onCheckedChange = { onToggle(item.category, it) },
+                )
+                androidx.compose.material3.Text(
+                    text = stringResource(
+                        if (item.checked) R.string.backup_sensitive_selected
+                        else R.string.backup_sensitive_not_selected,
+                    ),
+                    modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
+                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                )
+                androidx.compose.material3.Text(
+                    text = sensitiveCategoryDescription(item.category),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -540,6 +545,32 @@ private fun sensitiveCategoryTitle(category: io.legado.app.domain.model.BackupSe
             io.legado.app.domain.model.BackupSensitiveCategory.OTHER -> R.string.backup_sensitive_other
         }
     )
+
+@Composable
+private fun sensitiveCategoryDescription(category: io.legado.app.domain.model.BackupSensitiveCategory): String =
+    stringResource(
+        when (category) {
+            io.legado.app.domain.model.BackupSensitiveCategory.WEBDAV_CREDENTIALS -> R.string.backup_sensitive_webdav_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.SERVER_CREDENTIALS -> R.string.backup_sensitive_server_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.BOOK_SOURCE_AUTH -> R.string.backup_sensitive_source_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.REQUEST_HEADERS -> R.string.backup_sensitive_headers_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.RSS_AUTH -> R.string.backup_sensitive_rss_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.TTS_API_KEYS -> R.string.backup_sensitive_tts_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS -> R.string.backup_sensitive_direct_link_desc
+            io.legado.app.domain.model.BackupSensitiveCategory.OTHER -> R.string.backup_sensitive_other_desc
+        }
+    )
+
+/** 按屏幕高度计算弹窗尺寸，并限制极小屏幕与大屏幕的上下边界。 */
+@Composable
+private fun adaptiveBackupDialogHeight(
+    fraction: Float,
+    min: androidx.compose.ui.unit.Dp,
+    max: androidx.compose.ui.unit.Dp,
+): androidx.compose.ui.unit.Dp {
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    return (screenHeight * fraction).coerceIn(min, max)
+}
 
 @Composable
 private fun IgnoreItemsSheet(
@@ -568,8 +599,7 @@ private fun IgnoreItemsSheet(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             CardTabRow(
@@ -610,6 +640,8 @@ private fun BackupConfigDialogs(
     state: BackupConfigUiState,
     onIntent: (BackupConfigIntent) -> Unit,
 ) {
+    val resultDialogHeight = adaptiveBackupDialogHeight(fraction = 0.40f, min = 200.dp, max = 450.dp)
+    val previewDialogHeight = adaptiveBackupDialogHeight(fraction = 0.65f, min = 300.dp, max = 550.dp)
     val dialog = state.activeDialog
     val auth = dialog as? BackupConfigDialog.WebDavAuth
     AppAlertDialog(
@@ -692,13 +724,16 @@ private fun BackupConfigDialogs(
                 it.failures,
                 it.category.orEmpty(),
             )
-        },
+        } ?: loading?.let { stringResource(R.string.backup_restore_progress_preparing) },
         content = {
+            if (loading?.progress == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
             loading?.progress?.failedCategoryCounts
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { counts ->
                     Text(
-                        text = counts.entries.joinToString { (category, count) -> "$category($count)" },
+                        text = restoreFailureSummary(counts),
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 }
@@ -707,6 +742,7 @@ private fun BackupConfigDialogs(
 
     val integrity = dialog as? BackupConfigDialog.ConfigIntegrityReport
     AppAlertDialog(
+        modifier = Modifier.height(resultDialogHeight),
         show = integrity != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
         title = stringResource(R.string.backup_config_integrity_title),
@@ -722,27 +758,82 @@ private fun BackupConfigDialogs(
         }.orEmpty(),
         content = {
             integrity?.let { report ->
+                report.message?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                if (report.result.localBackupAttempted) {
+                    Text(
+                        text = stringResource(
+                            if (report.result.localBackupCreated) R.string.backup_local_result_success
+                            else R.string.backup_local_result_failed,
+                        ),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                if (report.result.webDavUploadAttempted) {
+                    Text(
+                        text = stringResource(
+                            if (report.result.webDavUploadFailed) R.string.backup_webdav_result_failed
+                            else R.string.backup_webdav_result_success,
+                        ),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
                 if (report.result.webDavUploadFailed) {
                     Text(
                         text = stringResource(R.string.backup_webdav_upload_failed),
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
-                Text(
-                    text = if (report.expanded) stringResource(R.string.backup_sensitive_collapse)
-                    else stringResource(R.string.backup_sensitive_expand),
-                    modifier = Modifier.clickable {
-                        onIntent(BackupConfigIntent.ToggleConfigReportDetails)
-                    },
-                )
-                if (report.expanded) {
-                    listOf(
-                        report.result.failedConfigKeyNames,
-                        report.result.notSetConfigKeyNames,
-                        report.result.unsupportedConfigKeyNames,
-                        report.result.ignoredConfigKeyNames,
-                    ).flatten().forEach { key ->
-                        Text(text = key, modifier = Modifier.padding(vertical = 2.dp))
+                report.result.categoryStats.entries
+                    .filter { (_, stats) -> stats.inserted + stats.updated + stats.skipped + stats.deleted + stats.failed > 0 }
+                    .forEach { (category, stats) ->
+                        Text(
+                            text = stringResource(
+                                R.string.backup_restore_category_result,
+                                restoreCategoryTitle(category),
+                                stats.inserted,
+                                stats.updated,
+                                stats.skipped,
+                                stats.deleted,
+                                stats.failed,
+                            ),
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                if (report.result.failedCategories.isNotEmpty()) {
+                    Text(
+                        text = stringResource(
+                            R.string.backup_restore_failed_categories,
+                            restoreFailureSummary(report.result.failedCategoryCounts),
+                        ),
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        color = LegadoTheme.colorScheme.error,
+                    )
+                }
+                val detailCount = report.result.failedConfigKeyNames.size +
+                    report.result.notSetConfigKeyNames.size +
+                    report.result.unsupportedConfigKeyNames.size +
+                    report.result.ignoredConfigKeyNames.size +
+                    report.result.decryptionFailedConfigKeyNames.size
+                if (detailCount > 0) {
+                    Text(
+                        text = if (report.expanded) stringResource(R.string.backup_sensitive_collapse)
+                        else stringResource(R.string.backup_sensitive_expand),
+                        modifier = Modifier.clickable {
+                            onIntent(BackupConfigIntent.ToggleConfigReportDetails)
+                        },
+                    )
+                }
+                if (report.expanded && detailCount > 0) {
+                    configDetailTitles(report.result).forEach { title ->
+                        Text(
+                            text = stringResource(R.string.backup_config_detail_category, title),
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
                     }
                 }
             }
@@ -753,6 +844,7 @@ private fun BackupConfigDialogs(
 
     val preview = dialog as? BackupConfigDialog.RestorePreview
     AppAlertDialog(
+        modifier = Modifier.height(previewDialogHeight),
         show = preview != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
         title = stringResource(R.string.restore_preview),
@@ -767,26 +859,29 @@ private fun BackupConfigDialogs(
         content = {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
+                    .fillMaxWidth(),
             ) {
             if (preview != null) {
                 val empty = preview.preview.emptyCategories
                 val missing = preview.preview.missingCategories
                 val backupIgnored = preview.preview.backupIgnoredCategories
                 val restoreIgnored = preview.preview.restoreIgnoredCategories
-                if (empty.isNotEmpty() || missing.isNotEmpty() || backupIgnored.isNotEmpty() || restoreIgnored.isNotEmpty()) {
-                    Text(
-                        text = stringResource(
-                            R.string.restore_preview_category_status,
-                            empty.joinToString(),
-                            missing.joinToString(),
-                            backupIgnored.joinToString(),
-                            restoreIgnored.joinToString(),
-                        ),
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                }
+                if (empty.isNotEmpty()) Text(
+                    text = stringResource(R.string.restore_preview_empty_categories, restoreCategoryTitles(empty)),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                if (missing.isNotEmpty()) Text(
+                    text = stringResource(R.string.restore_preview_missing_categories, restoreCategoryTitles(missing)),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                if (backupIgnored.isNotEmpty()) Text(
+                    text = stringResource(R.string.restore_preview_backup_ignored, restoreCategoryTitles(backupIgnored)),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                if (restoreIgnored.isNotEmpty()) Text(
+                    text = stringResource(R.string.restore_preview_restore_ignored, restoreCategoryTitles(restoreIgnored)),
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
             }
             if (preview?.preview?.sensitiveIncluded == true) {
                 AppTextField(
@@ -795,21 +890,24 @@ private fun BackupConfigDialogs(
                     label = stringResource(R.string.backup_password),
                     backgroundColor = LegadoTheme.colorScheme.surface,
                 )
-                preview.preview.sensitiveItems.filterNot { it in io.legado.app.domain.model.BackupSensitiveCategory.entries.map { category -> category.name } }
-                    .forEach { item ->
-                        androidx.compose.material3.Text(
-                            text = item,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-                        )
-                    }
+                Text(
+                    text = stringResource(R.string.restore_preview_sensitive_hint),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            if (preview?.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY) {
-                // 可选类别来自备份预览；不能来自当前已选集合，否则取消一次后
-                // 该行会消失，用户无法重新勾选。
-                (preview.preview.categories.keys + preview.preview.missingCategories)
+            if (preview?.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY ||
+                preview?.mode == io.legado.app.domain.model.RestoreMode.CLEAR_THEN_RESTORE) {
+                // 分类恢复和清空恢复都必须让用户明确选择受影响的类别。
+                // 清空恢复只列出备份中实际存在的类别，避免提示用户清空不存在的数据。
+                (if (preview.mode == io.legado.app.domain.model.RestoreMode.CLEAR_THEN_RESTORE) {
+                    preview.preview.categories.keys
+                } else {
+                    preview.preview.categories.keys + preview.preview.missingCategories
+                })
                     .distinct().sorted().forEach { category ->
                     CheckboxItem(
-                        title = category,
+                        title = restoreCategoryTitle(category),
                         checked = category in preview.selectedCategories,
                         onCheckedChange = { onIntent(BackupConfigIntent.ToggleRestorePreviewCategory(category)) },
                     )
@@ -828,42 +926,135 @@ private fun BackupConfigDialogs(
                             modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
                         )
                     }
-                    val categoryMode = preview.categoryModes[category] ?: io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
-                    androidx.compose.material3.Text(
-                        text = stringResource(
-                            if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
-                                R.string.restore_category_use_backup
-                            } else {
-                                R.string.restore_category_keep_application
-                            }
-                        ),
-                        modifier = Modifier
-                            .padding(start = 16.dp, bottom = 6.dp)
-                            .clickable {
-                                onIntent(
-                                    BackupConfigIntent.SetRestorePreviewCategoryMode(
-                                        category,
-                                        if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
-                                            io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
-                                        } else {
-                                            io.legado.app.domain.model.RestoreMode.USE_BACKUP
-                                        },
+                    if (preview.mode == io.legado.app.domain.model.RestoreMode.BY_CATEGORY) {
+                        val categoryMode = preview.categoryModes[category] ?: io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
+                        androidx.compose.material3.Text(
+                            text = stringResource(
+                                if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
+                                    R.string.restore_category_use_backup
+                                } else {
+                                    R.string.restore_category_keep_application
+                                }
+                            ),
+                            modifier = Modifier
+                                .padding(start = 16.dp, bottom = 6.dp)
+                                .clickable {
+                                    onIntent(
+                                        BackupConfigIntent.SetRestorePreviewCategoryMode(
+                                            category,
+                                            if (categoryMode == io.legado.app.domain.model.RestoreMode.USE_BACKUP) {
+                                                io.legado.app.domain.model.RestoreMode.KEEP_APPLICATION
+                                            } else {
+                                                io.legado.app.domain.model.RestoreMode.USE_BACKUP
+                                            },
+                                        )
                                     )
-                                )
-                            },
-                    )
+                                },
+                        )
+                    }
                 }
             }
             }
         },
         confirmText = stringResource(R.string.restore),
         onConfirm = { preview?.let {
-            if (it.networkName != null) onIntent(BackupConfigIntent.ConfirmNetworkRestorePreview(it.networkName))
+            if (it.mode == RestoreMode.CLEAR_THEN_RESTORE) {
+                onIntent(BackupConfigIntent.RequestClearRestoreConfirmation(it.uri, it.networkName, it.selectedCategories))
+            } else if (it.networkName != null) onIntent(BackupConfigIntent.ConfirmNetworkRestorePreview(it.networkName))
             else onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri))
         } },
         dismissText = stringResource(R.string.cancel),
         onDismiss = { onIntent(BackupConfigIntent.DismissDialog) },
     )
+
+    val clearRestore = dialog as? BackupConfigDialog.ConfirmClearRestore
+    ConfirmDialog(
+        show = clearRestore != null,
+        title = stringResource(R.string.restore_clear_confirm_title),
+        text = stringResource(
+            R.string.restore_clear_confirm_message,
+            clearRestore?.selectedCategories?.let { restoreCategoryTitles(it) }.orEmpty(),
+        ),
+        onConfirm = {
+            clearRestore?.let {
+                onIntent(BackupConfigIntent.ConfirmClearRestore(it.uri, it.networkName, it.selectedCategories))
+            }
+        },
+        onDismiss = { onIntent(BackupConfigIntent.DismissDialog) },
+    )
+}
+
+@Composable
+private fun restoreCategoryTitle(category: String): String = stringResource(
+    when (category) {
+        "bookshelf" -> R.string.restore_category_bookshelf
+        "bookmark" -> R.string.restore_category_bookmark
+        "bookGroup" -> R.string.restore_category_book_group
+        "bookSource" -> R.string.restore_category_book_source
+        "rssSource" -> R.string.restore_category_rss_source
+        "rssStar" -> R.string.restore_category_rss_star
+        "replaceRule" -> R.string.restore_category_replace_rule
+        "readRecord" -> R.string.restore_category_read_record
+        "searchHistory" -> R.string.restore_category_search_history
+        "server" -> R.string.restore_category_server
+        "sourceSub" -> R.string.restore_category_source_sub
+        "txtTocRule" -> R.string.restore_category_txt_toc
+        "httpTTS" -> R.string.restore_category_http_tts
+        "keyboardAssists" -> R.string.restore_category_keyboard_assists
+        "dictRule" -> R.string.restore_category_dict_rule
+        "homepageModules" -> R.string.restore_category_homepage_modules
+        "homepageCustomSets" -> R.string.restore_category_homepage_sets
+        "highlightRule" -> R.string.restore_category_highlight_rule
+        "highlightTagRule" -> R.string.restore_category_highlight_tag_rule
+        "tagGroupRule" -> R.string.restore_category_tag_group_rule
+        "directLinkUploadRule" -> R.string.restore_category_direct_link
+        "readSettings" -> R.string.restore_category_read_settings
+        "settings" -> R.string.restore_category_settings
+        "readConfig" -> R.string.restore_category_reader
+        "themeConfig" -> R.string.restore_category_theme
+        "coverConfig" -> R.string.restore_category_cover
+        "resources" -> R.string.restore_category_resources
+        else -> R.string.restore_category_other
+    },
+)
+
+@Composable
+private fun restoreCategoryTitles(categories: Collection<String>): String {
+    val titles = ArrayList<String>(categories.size)
+    for (category in categories) titles += restoreCategoryTitle(category)
+    return titles.joinToString()
+}
+
+/** 将内部配置键归并为用户可理解的设置类别，避免在结果弹窗泄露实现细节。 */
+@Composable
+private fun configDetailTitles(result: io.legado.app.domain.model.BackupRestoreResult): List<String> {
+    val keys = result.failedConfigKeyNames + result.notSetConfigKeyNames +
+        result.unsupportedConfigKeyNames + result.ignoredConfigKeyNames +
+        result.decryptionFailedConfigKeyNames
+    val groups = linkedSetOf<String>()
+    keys.forEach { key ->
+        groups += when {
+            key.contains("webdav", ignoreCase = true) || key.contains("server", ignoreCase = true) ||
+                key.contains("network", ignoreCase = true) || key.contains("http", ignoreCase = true) ->
+                stringResource(R.string.backup_config_detail_network)
+            key.contains("theme", ignoreCase = true) || key.contains("color", ignoreCase = true) ||
+                key.contains("background", ignoreCase = true) ->
+                stringResource(R.string.backup_config_detail_theme)
+            key.contains("read", ignoreCase = true) || key.contains("textSelect", ignoreCase = true) ->
+                stringResource(R.string.backup_config_detail_reader)
+            key.contains("book", ignoreCase = true) || key.contains("shelf", ignoreCase = true) ->
+                stringResource(R.string.backup_config_detail_bookshelf)
+            else -> stringResource(R.string.backup_config_detail_other)
+        }
+    }
+    return groups.toList()
+}
+
+@Composable
+private fun restoreFailureSummary(counts: Map<String, Int>): String {
+    val titles = ArrayList<String>(counts.size)
+    for ((category, count) in counts) titles += "${restoreCategoryTitle(category)}($count)"
+    return titles.joinToString()
 }
 
 @Composable

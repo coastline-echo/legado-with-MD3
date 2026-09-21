@@ -209,14 +209,20 @@ class AnalyzeRule(
             result = content
             if (result is NativeObject) {
                 val sourceRule = ruleList.first()
+                val originalRule = sourceRule.rule
+                val originalMode = sourceRule.mode
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
                 result = if (sourceRule.getParamSize() > 1) {
                     // get {{}}
                     sourceRule.rule
                 } else {
-                    // 键值直接访问
-                    result[sourceRule.rule]
+                    // NativeObject 快捷路径也必须遵守规则模式，不能把 JSON/JS 规则当作普通键名。
+                    when (originalMode) {
+                        Mode.Js -> evalJS(originalRule, result)?.toString()
+                        Mode.Json -> getAnalyzeByJSonPath(GSON.toJson(result)).getStringList(originalRule)
+                        else -> result[sourceRule.rule]
+                    }
                 }
                 result?.let {
                     if (sourceRule.replaceRegex.isNotEmpty() && it is List<*>) {
@@ -308,14 +314,20 @@ class AnalyzeRule(
             result = content
             if (result is NativeObject) {
                 val sourceRule = ruleList.first()
+                val originalRule = sourceRule.rule
+                val originalMode = sourceRule.mode
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
                 result = if (sourceRule.getParamSize() > 1) {
                     // get {{}}
                     sourceRule.rule
                 } else {
-                    // 键值直接访问
-                    result[sourceRule.rule]?.toString()
+                    // NativeObject 快捷路径也必须遵守规则模式。
+                    when (originalMode) {
+                        Mode.Js -> evalJS(originalRule, result)?.toString()
+                        Mode.Json -> getAnalyzeByJSonPath(GSON.toJson(result)).getString(originalRule)
+                        else -> result[sourceRule.rule]?.toString()
+                    }
                 }?.let {
                     replaceRegex(it, sourceRule)
                 }

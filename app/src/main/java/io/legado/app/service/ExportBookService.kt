@@ -332,7 +332,9 @@ class ExportBookService : BaseService(), KoinComponent {
         }
         if (currentExportSettings.exportToWebDav) {
             // 导出到webdav
-            AppWebDav.exportWebDav(bookDoc.uri, filename)
+            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
+                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
+            }
         }
     }
 
@@ -487,7 +489,9 @@ class ExportBookService : BaseService(), KoinComponent {
 
         if (currentExportSettings.exportToWebDav) {
             // 导出到webdav
-            AppWebDav.exportWebDav(bookDoc.uri, filename)
+            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
+                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
+            }
         }
     }
 
@@ -955,10 +959,12 @@ class ExportBookService : BaseService(), KoinComponent {
                     .write(epubBook, bookOs)
             }
 
-            if (currentExportSettings.exportToWebDav) {
-                // 导出到webdav
-                AppWebDav.exportWebDav(bookDoc.uri, filename)
+if (currentExportSettings.exportToWebDav) {
+            // 导出到webdav
+            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
+                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
             }
+        }
         }
 
         /**

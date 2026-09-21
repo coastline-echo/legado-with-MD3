@@ -1057,6 +1057,8 @@ sealed interface ConfigUpdateAction {
     data object UpdateWholeBookPageDemand : ConfigUpdateAction
     data object SubmitRenderTask : ConfigUpdateAction
     data object UpdatePageAnim : ConfigUpdateAction
+    /** 文本选择菜单顺序/显示状态恢复后，重新读取 DataStore 配置。 */
+    data object RefreshTextSelectionMenu : ConfigUpdateAction
 }
 
 private val HEADER_FOOTER_TIP_ACTIONS = setOf(

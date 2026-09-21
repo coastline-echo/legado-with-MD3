@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
@@ -55,6 +56,7 @@ fun OptionSheet(
 fun RowScope.OptionCard(
     icon: ImageVector,
     text: String,
+    description: String? = null,
     onClick: () -> Unit
 ) {
     NormalCard(
@@ -82,6 +84,17 @@ fun RowScope.OptionCard(
                 style = LegadoTheme.typography.labelMedium,
                 maxLines = 1
             )
+            description?.let { desc ->
+                Spacer(modifier = Modifier.height(4.dp))
+                AppText(
+                    text = desc,
+                    style = LegadoTheme.typography.labelSmall,
+                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            }
         }
     }
 }

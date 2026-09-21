@@ -1,12 +1,21 @@
 package io.legado.app.ui.config.backupConfig
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import io.legado.app.R
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionCard
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionSheet
@@ -29,16 +38,19 @@ fun BackupOptionSheet(
         OptionCard(
             icon = Icons.Default.PhoneAndroid,
             text = stringResource(R.string.backup_to_local),
+            description = stringResource(R.string.backup_to_local_desc),
             onClick = onBackupToLocal,
         )
         OptionCard(
             icon = Icons.Default.Cloud,
             text = stringResource(R.string.backup_to_network),
+            description = stringResource(R.string.backup_to_network_desc),
             onClick = onBackupToNetwork,
         )
         OptionCard(
             icon = Icons.Default.Lan,
             text = stringResource(R.string.backup_to_local_and_network),
+            description = stringResource(R.string.backup_to_both_desc),
             onClick = onBackupToLocalAndNetwork,
         )
     }
@@ -52,43 +64,47 @@ fun RestoreOptionSheet(
     onRestoreFromLocal: (RestoreMode) -> Unit,
     onRestoreFromNetwork: (RestoreMode) -> Unit,
 ) {
+    var source by androidx.compose.runtime.remember { mutableStateOf<RestoreSource?>(null) }
     OptionSheet(
         show = show,
-        onDismissRequest = onDismissRequest,
-        title = stringResource(R.string.restore),
+        onDismissRequest = { source = null; onDismissRequest() },
+        title = stringResource(if (source == null) R.string.restore_choose_source else R.string.restore_choose_strategy),
     ) {
-        OptionCard(
-            icon = Icons.Default.PhoneAndroid,
-            text = stringResource(R.string.restore_from_local_use_backup),
-            onClick = { onRestoreFromLocal(RestoreMode.USE_BACKUP) },
-        )
-        OptionCard(
-            icon = Icons.Default.PhoneAndroid,
-            text = stringResource(R.string.restore_from_local_keep_application),
-            onClick = { onRestoreFromLocal(RestoreMode.KEEP_APPLICATION) },
-        )
-        OptionCard(
-            icon = Icons.Default.PhoneAndroid,
-            text = stringResource(R.string.restore_from_local_by_category),
-            onClick = { onRestoreFromLocal(RestoreMode.BY_CATEGORY) },
-        )
-        OptionCard(
-            icon = Icons.Default.Cloud,
-            text = stringResource(R.string.restore_from_network_use_backup),
-            onClick = { onRestoreFromNetwork(RestoreMode.USE_BACKUP) },
-        )
-        OptionCard(
-            icon = Icons.Default.Cloud,
-            text = stringResource(R.string.restore_from_network_keep_application),
-            onClick = { onRestoreFromNetwork(RestoreMode.KEEP_APPLICATION) },
-        )
-        OptionCard(
-            icon = Icons.Default.Cloud,
-            text = stringResource(R.string.restore_from_network_by_category),
-            onClick = { onRestoreFromNetwork(RestoreMode.BY_CATEGORY) },
-        )
+        AnimatedContent(
+            targetState = source,
+            label = "restore-options",
+            modifier = Modifier.fillMaxWidth(),
+        ) { selectedSource ->
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                maxItemsInEachRow = 2,
+            ) {
+                if (selectedSource == null) {
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_source_local),
+                        description = stringResource(R.string.restore_source_local_desc)) { source = RestoreSource.LOCAL }
+                    OptionCard(Icons.Default.Cloud, stringResource(R.string.restore_source_webdav),
+                        description = stringResource(R.string.restore_source_webdav_desc)) { source = RestoreSource.WEBDAV }
+                } else {
+                    fun restore(mode: RestoreMode) {
+                        val action = if (selectedSource == RestoreSource.LOCAL) onRestoreFromLocal else onRestoreFromNetwork
+                        source = null
+                        action(mode)
+                    }
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_merge),
+                        description = stringResource(R.string.restore_strategy_merge_desc)) { restore(RestoreMode.KEEP_APPLICATION) }
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_replace),
+                        description = stringResource(R.string.restore_strategy_replace_desc)) { restore(RestoreMode.CLEAR_THEN_RESTORE) }
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_by_category),
+                        description = stringResource(R.string.restore_strategy_by_category_desc)) { restore(RestoreMode.BY_CATEGORY) }
+                }
+            }
+        }
     }
 }
+
+private enum class RestoreSource { LOCAL, WEBDAV }
 
 /** 旧版数据既可从完整目录导入，也可直接选择单个 JSON 文件。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,11 +123,13 @@ fun LegacyImportOptionSheet(
         OptionCard(
             icon = Icons.Default.PhoneAndroid,
             text = stringResource(R.string.select_file),
+            description = stringResource(R.string.select_file_desc),
             onClick = onSelectFile,
         )
         OptionCard(
             icon = Icons.Default.PhoneAndroid,
             text = stringResource(R.string.select_folder),
+            description = stringResource(R.string.select_folder_desc),
             onClick = onSelectDirectory,
         )
     }
