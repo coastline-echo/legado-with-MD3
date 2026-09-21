@@ -12,6 +12,7 @@ import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.domain.model.settings.ReadSettings
 import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.compatDsValue
+import io.legado.app.utils.GSON
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -38,6 +39,17 @@ class ReadSettingsRepository(
             read = { it.toReadSettings() },
             toPrefMap = ReadSettings::toGatewayPrefMap,
             transform = transform,
+        )
+    }
+
+    override fun exportJson(): String = GSON.toJson(currentSettings)
+
+    override suspend fun importJson(json: String) {
+        val settings = GSON.fromJson(json, ReadSettings::class.java)
+        AppConfigStore.atomicUpdate(
+            read = { it.toReadSettings() },
+            toPrefMap = ReadSettings::toGatewayPrefMap,
+            transform = { _ -> settings },
         )
     }
 

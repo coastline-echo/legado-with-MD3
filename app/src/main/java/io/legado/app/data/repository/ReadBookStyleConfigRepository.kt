@@ -9,6 +9,7 @@ import io.legado.app.domain.gateway.ReadStyleFloatKey
 import io.legado.app.domain.gateway.ReadStyleIntKey
 import io.legado.app.domain.gateway.ReadStyleMutation
 import io.legado.app.domain.gateway.ReadStyleStringKey
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.domain.model.settings.ReadStyleItem
 import io.legado.app.domain.model.settings.ReadStyleState
 import io.legado.app.help.DefaultData
@@ -32,6 +33,7 @@ class ReadBookStyleConfigRepository(
     private val readStyleRepository: ReadStyleRepository,
     private val highlightRuleRepository: HighlightRuleRepository,
     private val configStore: ReadStyleConfigStore,
+    override val readSettingsGateway: ReadSettingsGateway? = null,
 ) : ReadStyleGateway {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val saveQueue = ReadStyleSaveQueue(
