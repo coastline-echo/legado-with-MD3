@@ -41,12 +41,15 @@ object BackupConfig {
     private var sensitiveSelectionValue: BackupSensitiveSelection? = null
     val sensitiveSelection: BackupSensitiveSelection
         get() = sensitiveSelectionValue ?: run {
-            val file = FileUtils.createFileIfNotExist(sensitiveSelectionPath)
-            val values = GSON.fromJsonObject<Set<String>>(file.readText()).getOrNull().orEmpty()
+            val file = java.io.File(sensitiveSelectionPath)
+            val configured = file.isFile
+            val values = if (configured) {
+                GSON.fromJsonObject<Set<String>>(file.readText()).getOrNull()
+            } else null
             BackupSensitiveSelection(
-                selected = values.mapNotNull { value ->
+                selected = values?.mapNotNull { value ->
                     runCatching { BackupSensitiveCategory.valueOf(value) }.getOrNull()
-                }.toSet().ifEmpty { BackupSensitiveCategory.entries.toSet() },
+                }?.toSet() ?: BackupSensitiveCategory.entries.toSet(),
             ).also { sensitiveSelectionValue = it }
         }
 

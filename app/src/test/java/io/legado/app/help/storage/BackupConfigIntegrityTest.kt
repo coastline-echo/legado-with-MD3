@@ -58,4 +58,29 @@ class BackupConfigIntegrityTest {
         assertEquals(setOf("unsupported"), result.unsupported)
         assertEquals(setOf("failed"), result.failed)
     }
+
+    @Test
+    fun `key matrix reports missing key in every critical configuration domain`() {
+        val requiredKeys = setOf(
+            "mainNavigationOrder", // 应用壳和底栏
+            "appTheme", // 主题
+            "bookshelfLayout", // 书架
+            "readStyleSelect", // 阅读器
+            "textSelectMenuConfig", // 阅读页文本选择菜单
+            "comicStyleSelect", // 漫画
+            "webDavUrl", // 网络和 WebDAV
+            "ttsEngine", // TTS
+            "webService", // 服务
+        )
+
+        val result = BackupConfigIntegrityChecker.check(
+            snapshotKeys = emptySet(),
+            written = emptySet(),
+            ignored = emptySet(),
+            unsupported = emptySet(),
+            requiredKeys = requiredKeys,
+        )
+
+        assertEquals(requiredKeys, result.notSet)
+    }
 }

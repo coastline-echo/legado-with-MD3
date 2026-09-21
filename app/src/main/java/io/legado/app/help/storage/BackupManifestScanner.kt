@@ -69,21 +69,22 @@ object BackupManifestScanner {
         val warnings = mutableListOf<String>()
         warnings += entryWarnings.distinct()
         manifestWarning?.let { warnings += it }
-        if (manifest == null) {
-            return BackupScanResult(false, warnings = warnings.ifEmpty { listOf("manifest.json 解析失败") })
-        }
-        if (manifest.formatVersion <= 0) warnings += "manifest.json 格式版本无效"
-        if (manifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
-        if (manifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
-        val declaredEntries = (manifest.files.map { it.name } + manifest.resources.map { it.name }).toSet()
-        if (declaredEntries.size != manifest.files.size + manifest.resources.size) {
+        val parsedManifest = manifest
+            ?: return BackupScanResult(false, warnings = warnings.ifEmpty { listOf("manifest.json 解析失败") })
+        warnings += parsedManifest.warnings
+        if (parsedManifest.formatVersion <= 0) warnings += "manifest.json 格式版本无效"
+        if (parsedManifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
+        if (parsedManifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
+        val declaredEntries = (parsedManifest.files.map { it.name } + parsedManifest.resources.map { it.name }).toSet()
+        if (declaredEntries.size != parsedManifest.files.size + parsedManifest.resources.size) {
             warnings += "manifest.json 存在重复文件声明"
         }
-        validateCategories(manifest, declaredEntries, warnings)
-        validateResourceAliases(manifest, declaredEntries, warnings)
-        validateSensitiveItems(manifest, warnings)
-        (manifest.files.map { Triple(it.name, it.size, it.sha256) } +
-            manifest.resources.map { Triple(it.name, it.size, it.sha256) }).forEach { triple ->
+        validateCategories(parsedManifest, declaredEntries, warnings)
+        validateCategoryCounts(parsedManifest, warnings)
+        validateResourceAliases(parsedManifest, declaredEntries, warnings)
+        validateSensitiveItems(root = null, manifest = parsedManifest, declaredEntries = declaredEntries, warnings = warnings)
+        (parsedManifest.files.map { Triple(it.name, it.size, it.sha256) } +
+            parsedManifest.resources.map { Triple(it.name, it.size, it.sha256) }).forEach { triple ->
             val (name, size, hash) = triple
             val actual = entries[name]
             if (actual == null) warnings += "缺少文件：$name"
@@ -95,7 +96,7 @@ object BackupManifestScanner {
         entries.keys
             .filterNot { it == "manifest.json" || it in declaredEntries }
             .forEach { warnings += "未登记文件：$it" }
-        return BackupScanResult(false, manifest, warnings)
+        return BackupScanResult(false, parsedManifest, warnings)
     }
 
     fun scan(root: File): BackupScanResult {
@@ -111,6 +112,7 @@ object BackupManifestScanner {
                 )
             }
         val warnings = mutableListOf<String>()
+        warnings += manifest.warnings
         if (manifest.formatVersion <= 0) warnings += "manifest.json 格式版本无效"
         if (manifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
         if (manifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
@@ -125,8 +127,9 @@ object BackupManifestScanner {
             warnings += "manifest.json 存在重复文件声明"
         }
         validateCategories(manifest, declaredEntries, warnings)
+        validateCategoryCounts(manifest, warnings)
         validateResourceAliases(manifest, declaredEntries, warnings)
-        validateSensitiveItems(manifest, warnings)
+        validateSensitiveItems(root, manifest, declaredEntries, warnings)
         val rootPath = root.canonicalFile.toPath()
         root.walkTopDown()
             .filter(File::isFile)
@@ -173,12 +176,45 @@ object BackupManifestScanner {
         }
     }
 
-    private fun validateSensitiveItems(
+    private fun validateCategoryCounts(
         manifest: BackupManifest,
+        warnings: MutableList<String>,
+    ) {
+        manifest.categoryCounts.forEach { (category, count) ->
+            if (count < 0) warnings += "类别数量无效：$category=$count"
+            if (category !in manifest.categories.keys) {
+                warnings += "类别数量引用未声明类别：$category"
+            }
+        }
+    }
+
+    private fun validateSensitiveItems(
+        root: File?,
+        manifest: BackupManifest,
+        declaredEntries: Set<String>,
         warnings: MutableList<String>,
     ) {
         manifest.sensitiveItems.forEach { item ->
             if (item.isBlank()) warnings += "敏感项目标识为空"
+        }
+        val sensitiveFiles = mapOf(
+            "SERVER_CREDENTIALS" to "servers.json",
+            "BOOK_SOURCE_AUTH" to "bookSource.json",
+            "REQUEST_HEADERS" to "bookSource.json",
+            "RSS_AUTH" to "rssSources.json",
+            "TTS_API_KEYS" to "httpTTS.json",
+            "DIRECT_LINK_CREDENTIALS" to "directLinkUploadRule.json",
+        )
+        sensitiveFiles.forEach { (category, fileName) ->
+            if (category !in manifest.sensitiveItems) return@forEach
+            if (fileName !in declaredEntries) {
+                warnings += "敏感类别未登记载荷：$category"
+                return@forEach
+            }
+            val file = root?.let { File(it, fileName) }
+            if (file?.isFile == true && !BackupSensitiveEnvelope.isEncrypted(file.readText())) {
+                warnings += "敏感载荷未加密：$fileName"
+            }
         }
     }
 

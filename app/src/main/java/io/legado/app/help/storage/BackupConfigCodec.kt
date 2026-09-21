@@ -1,8 +1,8 @@
 package io.legado.app.help.storage
 
-import org.xmlpull.v1.XmlPullParser
-import org.xmlpull.v1.XmlPullParserFactory
-import java.io.StringReader
+import java.io.ByteArrayInputStream
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 data class BackupConfigEncoding(
     val xml: String,
@@ -73,50 +73,42 @@ object BackupConfigCodec {
     }
 
     fun decodeWithReport(xml: String): BackupConfigDecoding {
-        val factory = XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser().apply {
-            setInput(StringReader(xml))
-        }
         val result = linkedMapOf<String, Any?>()
         val warnings = mutableListOf<String>()
-        var eventType = parser.eventType
-        while (eventType != XmlPullParser.END_DOCUMENT) {
-            if (eventType == XmlPullParser.START_TAG) {
-                val name = parser.getAttributeValue(null, "name")
-                if (name != null) {
-                    when (parser.name) {
-                        "string" -> result[name] = parser.nextText()
-                        "set" -> result[name] = readStringSet(parser)
-                        "int" -> result[name] = parser.getAttributeValue(null, "value").toInt()
-                        "long" -> result[name] = parser.getAttributeValue(null, "value").toLong()
-                        "float" -> result[name] = parser.getAttributeValue(null, "value").toFloat()
-                        "boolean" -> result[name] = parser.getAttributeValue(null, "value").toBoolean()
-                        else -> warnings += "不支持的配置类型：${parser.name}（$name）"
-                    }
+        val document = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = false
+            // 配置来自备份文件，不允许外部实体、外部 DTD 或自定义 DOCTYPE。
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+        }.newDocumentBuilder().parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
+        val nodes = document.documentElement.childNodes
+        for (index in 0 until nodes.length) {
+            val element = nodes.item(index) as? Element ?: continue
+            val name = element.getAttribute("name").takeIf { it.isNotEmpty() } ?: continue
+            when (element.tagName) {
+                "string" -> result[name] = element.textContent.orEmpty()
+                "set" -> result[name] = element.getElementsByTagName("string").let { strings ->
+                    buildSet { for (i in 0 until strings.length) add(strings.item(i).textContent.orEmpty()) }
                 }
+                "int" -> result[name] = element.getAttribute("value").toInt()
+                "long" -> result[name] = element.getAttribute("value").toLong()
+                "float" -> result[name] = element.getAttribute("value").toFloat()
+                "boolean" -> result[name] = element.getAttribute("value").toBoolean()
+                else -> warnings += "不支持的配置类型：${element.tagName}（$name）"
             }
-            eventType = parser.next()
         }
         return BackupConfigDecoding(result, warnings)
-    }
-
-    private fun readStringSet(parser: XmlPullParser): Set<String> {
-        val values = linkedSetOf<String>()
-        var eventType = parser.next()
-        while (eventType != XmlPullParser.END_DOCUMENT) {
-            when (eventType) {
-                XmlPullParser.START_TAG -> if (parser.name == "string") values += parser.nextText()
-                XmlPullParser.END_TAG -> if (parser.name == "set") break
-            }
-            eventType = parser.next()
-        }
-        return values
     }
 
     private fun String.escapeXmlText(): String =
         replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
+            .replace("\"", "&quot;")
 
     private fun String.escapeXmlAttribute(): String =
         escapeXmlText()

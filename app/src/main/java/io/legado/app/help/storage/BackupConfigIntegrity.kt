@@ -34,10 +34,10 @@ object BackupConfigIntegrityChecker {
         unsupported: Set<String>,
         requiredKeys: Set<String> = emptySet(),
     ): BackupConfigIntegrity {
-        // 归一化为互斥状态：写入成功优先，其次忽略、类型不支持，最后才是写入失败。
+        // 归一化为互斥状态：写入成功优先；对未写入键，类型不支持比“忽略”更具体。
         val normalizedWritten = written.intersect(snapshotKeys)
-        val normalizedIgnored = (ignored - normalizedWritten).intersect(snapshotKeys)
-        val normalizedUnsupported = (unsupported - normalizedWritten - normalizedIgnored).intersect(snapshotKeys)
+        val normalizedUnsupported = (unsupported - normalizedWritten).intersect(snapshotKeys)
+        val normalizedIgnored = (ignored - normalizedWritten - normalizedUnsupported).intersect(snapshotKeys)
         val failed = snapshotKeys - normalizedWritten - normalizedIgnored - normalizedUnsupported
         return BackupConfigIntegrity(
             written = normalizedWritten,

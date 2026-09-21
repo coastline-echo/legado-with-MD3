@@ -10,6 +10,7 @@ data class BackupManifest(
     val appVersion: String = "",
     val createdAt: Long,
     val categories: Map<String, List<String>> = emptyMap(),
+    val categoryCounts: Map<String, Int> = emptyMap(),
     val files: List<BackupManifestFile> = emptyList(),
     val resources: List<BackupManifestResource> = emptyList(),
     val resourceAliases: Map<String, String> = emptyMap(),
@@ -23,6 +24,7 @@ data class BackupManifest(
     val sensitiveIncluded: Boolean = false,
     val sensitiveItems: Set<String> = emptySet(),
     val weakProtection: Boolean = false,
+    val warnings: List<String> = emptyList(),
     val legacyFormat: Boolean = false,
 )
 
@@ -44,6 +46,7 @@ object BackupManifestBuilder {
         root: File,
         files: Collection<File>,
         categories: Map<String, List<String>> = emptyMap(),
+        categoryCounts: Map<String, Int> = emptyMap(),
         ignoredCategories: Set<String> = emptySet(),
         restoreIgnoredCategories: Set<String> = emptySet(),
         configKeys: Set<String> = emptySet(),
@@ -57,6 +60,7 @@ object BackupManifestBuilder {
         sensitiveIncluded: Boolean = false,
         sensitiveItems: Set<String> = emptySet(),
         weakProtection: Boolean = false,
+        warnings: List<String> = emptyList(),
     ): BackupManifest {
         val rootPath = root.canonicalFile.toPath()
         val fileEntries = files.mapNotNull { file ->
@@ -81,6 +85,7 @@ object BackupManifestBuilder {
             createdAt = System.currentTimeMillis(),
             appVersion = appVersion,
             categories = categories.mapValues { (_, names) -> names.sorted() },
+            categoryCounts = categoryCounts.toSortedMap(),
             files = fileEntries,
             resources = resourceEntries,
             resourceAliases = resourceAliases.toSortedMap(),
@@ -94,6 +99,7 @@ object BackupManifestBuilder {
             sensitiveIncluded = sensitiveIncluded,
             sensitiveItems = sensitiveItems.toSortedSet(),
             weakProtection = weakProtection,
+            warnings = warnings.toSortedSet().toList(),
         )
     }
 

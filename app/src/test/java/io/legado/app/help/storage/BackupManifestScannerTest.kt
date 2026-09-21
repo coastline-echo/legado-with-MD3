@@ -63,6 +63,42 @@ class BackupManifestScannerTest {
     }
 
     @Test
+    fun `real zip with encrypted sensitive payload passes preflight`() {
+        val root = Files.createTempDirectory("sensitive-zip").toFile()
+        try {
+            val payload = root.resolve("servers.json").apply {
+                // 预检只验证新信封标记；密码解密属于恢复阶段契约。
+                writeText("LEGADO_SENSITIVE_V1:ciphertext")
+            }
+            val manifest = BackupManifestBuilder.build(
+                root = root,
+                files = listOf(payload),
+                categories = mapOf("server" to listOf("servers.json")),
+                sensitiveIncluded = true,
+                sensitiveItems = setOf("SERVER_CREDENTIALS"),
+                appVersion = "test",
+            )
+            root.resolve("manifest.json").writeText(GSON.toJson(manifest))
+            val zip = root.resolve("backup.zip")
+            ZipOutputStream(FileOutputStream(zip)).use { output ->
+                root.resolve("servers.json").inputStream().use { input ->
+                    output.putNextEntry(ZipEntry("servers.json"))
+                    input.copyTo(output)
+                    output.closeEntry()
+                }
+                output.putNextEntry(ZipEntry("manifest.json"))
+                output.write(root.resolve("manifest.json").readBytes())
+                output.closeEntry()
+            }
+            val result = BackupManifestScanner.scanZip(zip.inputStream())
+            assertTrue(result.isUsable)
+            assertTrue(result.warnings.none { it.contains("敏感载荷未加密") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `invalid manifest is a failed new backup rather than a legacy backup`() {
         val root = Files.createTempDirectory("invalid-manifest").toFile()
         try {
@@ -91,6 +127,77 @@ class BackupManifestScannerTest {
             )
             val result = BackupManifestScanner.scan(root)
             assertTrue(result.warnings.any { it.contains("敏感项目标识为空") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `sensitive category without encrypted payload is reported`() {
+        val root = Files.createTempDirectory("sensitive-payload").toFile()
+        try {
+            val file = root.resolve("servers.json").apply { writeText("[]") }
+            val manifest = BackupManifestBuilder.build(
+                root = root,
+                files = listOf(file),
+                categories = mapOf("server" to listOf("servers.json")),
+                sensitiveItems = setOf("SERVER_CREDENTIALS"),
+            )
+            root.resolve("manifest.json").writeText(GSON.toJson(manifest))
+            assertTrue(BackupManifestScanner.scan(root).warnings.any { it.contains("敏感载荷未加密") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `sensitive category without payload is reported`() {
+        val root = Files.createTempDirectory("missing-sensitive-payload").toFile()
+        try {
+            root.resolve("manifest.json").writeText(
+                GSON.toJson(
+                    BackupManifest(
+                        createdAt = 1L,
+                        appVersion = "1",
+                        sensitiveItems = setOf("SERVER_CREDENTIALS"),
+                    ),
+                ),
+            )
+            assertTrue(BackupManifestScanner.scan(root).warnings.any { it.contains("敏感类别未登记载荷") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `invalid category counts are reported`() {
+        val root = Files.createTempDirectory("category-counts").toFile()
+        try {
+            root.resolve("manifest.json").writeText(
+                GSON.toJson(
+                    BackupManifest(
+                        createdAt = 1L,
+                        appVersion = "1",
+                        categoryCounts = mapOf("bookshelf" to -1, "unknown" to 2),
+                    ),
+                ),
+            )
+            val warnings = BackupManifestScanner.scan(root).warnings
+            assertTrue(warnings.any { it.contains("类别数量无效") })
+            assertTrue(warnings.any { it.contains("未声明类别") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `category counts are backward compatible when omitted`() {
+        val root = Files.createTempDirectory("legacy-category-counts").toFile()
+        try {
+            root.resolve("manifest.json").writeText(
+                GSON.toJson(BackupManifest(createdAt = 1L, appVersion = "1")),
+            )
+            assertTrue(BackupManifestScanner.scan(root).manifest?.categoryCounts?.isEmpty() == true)
         } finally {
             root.deleteRecursively()
         }

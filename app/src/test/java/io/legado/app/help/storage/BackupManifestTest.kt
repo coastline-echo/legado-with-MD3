@@ -4,10 +4,22 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackupManifestTest {
+
+    @Test
+    fun `sensitive source identifier is stable without exposing the source url`() {
+        val url = "https://user:secret@example.com/source"
+        val first = stableSensitiveIdentifier(url)
+        val second = stableSensitiveIdentifier(url)
+
+        assertEquals(first, second)
+        assertFalse(first.contains("secret"))
+        assertFalse(first.contains("example.com"))
+    }
 
     @Test
     fun `manifest records file size and sha256`() {
