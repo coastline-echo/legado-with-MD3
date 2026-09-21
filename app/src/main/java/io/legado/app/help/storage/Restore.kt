@@ -3,9 +3,9 @@ package io.legado.app.help.storage
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import androidx.room.withTransaction
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 import io.legado.app.BuildConfig
 import io.legado.app.R
 import io.legado.app.constant.AppLog
@@ -39,6 +39,7 @@ import io.legado.app.data.repository.ReadRecordRepository
 import io.legado.app.domain.gateway.AppLocaleGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.gateway.ReadSettingsGateway
+import io.legado.app.domain.model.settings.ReadSettings
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
 import io.legado.app.domain.model.BackupRestoreStage
@@ -64,6 +65,7 @@ import io.legado.app.utils.GSON
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.compress.ZipUtils
 import io.legado.app.utils.fromJsonArray
+import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.externalFiles
 import io.legado.app.utils.getFile
@@ -85,8 +87,6 @@ import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
-import java.util.zip.ZipInputStream
-import java.io.ByteArrayOutputStream
 
 /**
  * 恢复
@@ -94,84 +94,64 @@ import java.io.ByteArrayOutputStream
 object Restore : KoinComponent {
 
     private const val TAG = "Restore"
+
     // 阅读器当前只使用本地记录分区。旧版备份可能保留设备 Android ID，
     // 恢复时须归一化，否则同一本书会因 deviceId 不同而显示为两条记录。
     private const val LOCAL_READ_RECORD_DEVICE_ID = ""
 
-    /** 只读取 ZIP 结构和 manifest，不触碰应用数据。 */
+/** 只读取 ZIP 结构和 manifest，不触碰应用数据。 */
     suspend fun preview(context: Context, uri: Uri): RestorePreview = withContext(IO) {
         fun openInput() = if (uri.isContentScheme()) {
             DocumentFile.fromSingleUri(context, uri)?.openInputStream()
         } else {
             FileInputStream(File(uri.path!!))
         } ?: error("无法读取备份文件")
-        val scan = runCatching { openInput().use { BackupManifestScanner.scanZip(it) } }
-            .getOrElse { BackupScanResult(false, warnings = listOf("读取备份失败：${it.localizedMessage}")) }
-        val entries = mutableListOf<String>()
-        val manifestBytes = kotlin.runCatching {
-            val input = openInput()
-            ZipInputStream(input).use { zip ->
-                var entry = zip.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        entries += entry.name
-                        zip.closeEntry()
-                    }
-                    entry = zip.nextEntry
-                }
-            }
-            entries
-        }.getOrElse {
-            return@withContext RestorePreview(false, 0, 0, emptyMap(), listOf("读取备份失败：${it.localizedMessage}"))
-        }
-        val legacy = "manifest.json" !in manifestBytes
+
+        // 单次读取 ZIP 到临时目录，避免重复打开输入流
         val previewDir = File(context.cacheDir, "restore_preview_${System.nanoTime()}")
-        runCatching {
-            previewDir.mkdirs()
-            openInput().use { input -> ZipUtils.unZipToPath(input, previewDir.absolutePath) }
-            val detailed = previewUnzipped(previewDir.absolutePath)
-            return@withContext detailed.copy(
-                warnings = ((if (legacy) listOf("旧版备份缺少 manifest.json") else emptyList()) +
-                    scan.warnings + detailed.warnings).distinct(),
+            val scan = runCatching {
+                previewDir.mkdirs()
+                openInput().use { input -> ZipUtils.unZipToPath(input, previewDir.absolutePath) }
+            // 兼容旧版导出的 ZIP 外层多包一层目录的情况。
+            val root = normalizedBackupRoot(previewDir)
+            val scanResult = BackupManifestScanner.scan(root)
+            val detailed = previewUnzipped(root.absolutePath, scanResult)
+            detailed.copy(
+                warnings = ((if (scanResult.legacyFormat) listOf("旧版备份缺少 manifest.json") else emptyList()) +
+                    scanResult.warnings + detailed.warnings).distinct(),
             )
-        }.onFailure {
-            // 临时解压失败时继续返回 ZIP 结构摘要，不阻断用户查看基本信息。
+        }.getOrElse {
             AppLog.put("恢复预览数据扫描失败：${it.localizedMessage}", it)
+            RestorePreview(false, 0, 0, emptyMap(), listOf("读取备份失败：${it.localizedMessage}"))
         }.also {
             previewDir.deleteRecursively()
         }
-        val categoryCounts = manifestBytes.filter { !it.startsWith("assets/") }
-            .groupingBy(::previewCategory)
-            .eachCount()
-            .toMutableMap()
-        manifestBytes.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let {
-            categoryCounts["resources"] = it
+        return@withContext scan
+    }
+
+    /** 兼容原版或旧版 ZIP 将全部文件放在单层目录下的导出结构。 */
+    private fun normalizedBackupRoot(root: File): File {
+        var current = root
+        while (true) {
+            val files = current.listFiles().orEmpty()
+            if (files.any { it.isFile } || files.any { it.isDirectory && it.name == "assets" }) return current
+            val directories = files.filter(File::isDirectory)
+            if (directories.size != 1) return current
+            current = directories.single()
         }
-        RestorePreview(
-            legacyFormat = legacy,
-            fileCount = manifestBytes.count { !it.startsWith("assets/") },
-            resourceCount = manifestBytes.count { it.startsWith("assets/") },
-            categories = categoryCounts,
-            warnings = (if (legacy) listOf("旧版备份缺少 manifest.json") else emptyList()) + scan.warnings,
-            sensitiveIncluded = scan.manifest?.sensitiveIncluded == true,
-            weakProtection = scan.manifest?.weakProtection == true,
-            sensitiveItems = scan.manifest?.sensitiveItems.orEmpty(),
-            applicationCounts = applicationCategoryCounts(),
-            emptyCategories = categoryCounts.filterValues { it == 0 }.keys,
-            missingCategories = previewCategories().minus(categoryCounts.keys),
-            ignoredCategories = mergedIgnoredCategories(scan.manifest?.ignoredCategories.orEmpty()),
-            backupIgnoredCategories = scan.manifest?.ignoredCategories.orEmpty(),
-            restoreIgnoredCategories = currentRestoreIgnoredCategories() +
-                scan.manifest?.restoreIgnoredCategories.orEmpty(),
-            conflictCounts = emptyMap(),
-        )
     }
 
     /** WebDAV 已下载并解压到临时目录时使用的预览入口。 */
-    internal fun previewUnzipped(path: String): RestorePreview {
+    internal fun previewUnzipped(
+        path: String,
+        scan: BackupScanResult = BackupManifestScanner.scan(File(path)),
+    ): RestorePreview {
         val root = File(path)
         val files = root.walkTopDown().filter(File::isFile).map { root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') }.toList()
         val categories = files.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
+        scan.manifest?.categoryCounts
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { categories.putAll(it) }
         files.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let { categories["resources"] = it }
         val legacy = !File(root, "manifest.json").isFile
         return RestorePreview(
@@ -179,97 +159,172 @@ object Restore : KoinComponent {
             fileCount = files.count { !it.startsWith("assets/") },
             resourceCount = files.count { it.startsWith("assets/") },
             categories = categories,
-            warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else BackupManifestScanner.scan(root).warnings,
-            sensitiveIncluded = BackupManifestScanner.scan(root).manifest?.sensitiveIncluded == true,
-            weakProtection = BackupManifestScanner.scan(root).manifest?.weakProtection == true,
-            sensitiveItems = BackupManifestScanner.scan(root).manifest?.sensitiveItems.orEmpty(),
+            warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else scan.warnings,
+            sensitiveIncluded = scan.manifest?.sensitiveIncluded == true,
+            weakProtection = scan.manifest?.weakProtection == true,
+            sensitiveItems = scan.manifest?.sensitiveItems.orEmpty(),
             applicationCounts = applicationCategoryCounts(),
             emptyCategories = explicitEmptyCategories(root, categories.keys),
             missingCategories = previewCategories().minus(categories.keys),
-            ignoredCategories = mergedIgnoredCategories(
-                BackupManifestScanner.scan(root).manifest?.ignoredCategories.orEmpty(),
-            ),
-            backupIgnoredCategories = BackupManifestScanner.scan(root).manifest?.ignoredCategories.orEmpty(),
+            ignoredCategories = mergedIgnoredCategories(scan.manifest?.ignoredCategories.orEmpty()),
+            backupIgnoredCategories = scan.manifest?.ignoredCategories.orEmpty(),
             restoreIgnoredCategories = currentRestoreIgnoredCategories() +
-                BackupManifestScanner.scan(root).manifest?.restoreIgnoredCategories.orEmpty(),
+                scan.manifest?.restoreIgnoredCategories.orEmpty(),
             conflictCounts = previewConflictCounts(root),
         )
     }
 
-    /** 预览阶段按稳定主键统计冲突，不执行任何写入。 */
+/** 预览阶段按稳定主键统计冲突，不执行任何写入。 */
     private fun previewConflictCounts(root: File): Map<String, Int> = buildMap {
+        // 每类只读取一次现有身份，避免按备份项重复访问 DAO。
+        val bookUrls = appDb.bookDao.allBookUrls.toHashSet()
+        val sourceUrls = appDb.bookSourceDao.all.mapTo(hashSetOf()) { it.bookSourceUrl }
+        val serverIds = appDb.serverDao.all.mapTo(hashSetOf()) { it.id }
+        val rssSourceUrls = appDb.rssSourceDao.all.mapTo(hashSetOf()) { it.sourceUrl }
+        val replaceRuleIds = appDb.replaceRuleDao.all.mapTo(hashSetOf()) { it.id }
+        val bookmarkTimes = appDb.bookmarkDao.all.mapTo(hashSetOf()) { it.time }
+        val markingIds = appDb.bookMarkingDao.all.mapTo(hashSetOf()) { it.id }
+        val groupIds = appDb.bookGroupDao.all.mapTo(hashSetOf()) { it.groupId }
+        val searchWords = appDb.searchKeywordDao.all.mapTo(hashSetOf()) { it.word }
+        val homepageModuleIds = appDb.homepageModuleDao.getAll().mapTo(hashSetOf()) { it.id }
+        val homepageSetIds = appDb.homepageCustomSetDao.getAll().mapTo(hashSetOf()) { it.id }
+        val highlightIds = appDb.highlightRuleDao.getAll().mapTo(hashSetOf()) { it.id }
+        val highlightTagIds = appDb.highlightTagRuleDao.getAll().mapTo(hashSetOf()) { it.id }
+        val tagGroupIds = appDb.tagGroupRuleDao.getAll().mapTo(hashSetOf()) { it.id }
+        val readRecordIds = appDb.readRecordDao.all.mapTo(hashSetOf()) { it.bookName to it.bookAuthor }
+        val rssStarIds = appDb.rssStarDao.all.mapTo(hashSetOf()) { it.origin to it.link }
+        val keyboardIds = appDb.keyboardAssistsDao.all.mapTo(hashSetOf()) { it.type to it.key }
+        val httpTtsIds = appDb.httpTTSDao.all.mapTo(hashSetOf()) { it.id }
+        val sourceSubIds = appDb.ruleSubDao.all.mapTo(hashSetOf()) { it.id }
+        val tocRuleIds = appDb.txtTocRuleDao.all.mapTo(hashSetOf()) { it.id }
+        val dictRuleNames = appDb.dictRuleDao.all.mapTo(hashSetOf()) { it.name }
+        // 所有目录类别都返回显式数量；没有可比较身份时也必须显示 0，不能让 UI 把缺失误判为未扫描。
+        putAll(BackupRestoreCategoryCatalog.allCategories.associateWith { 0 })
         File(root, "bookshelf.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<Book>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("bookshelf", values.count { it.bookUrl in appDb.bookDao.allBookUrls })
+            if (values != null) put("bookshelf", values.count { it.bookUrl in bookUrls })
         }
-        File(root, "bookSource.json").takeIf(File::isFile)?.let { file ->
-            val values = runCatching { GSON.fromJsonArray<BookSource>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("bookSource", values.count { it.bookSourceUrl in appDb.bookSourceDao.all.map { source -> source.bookSourceUrl } })
+        readJsonArrayOrNull<BookSource>(root, "bookSource.json")?.let { values ->
+            put("bookSource", values.count { it.bookSourceUrl in sourceUrls })
         }
-        File(root, "servers.json").takeIf(File::isFile)?.let { file ->
-            val values = runCatching { GSON.fromJsonArray<Server>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("server", values.count { item -> appDb.serverDao.all.any { it.id == item.id } })
+        readJsonArrayOrNull<Server>(root, "servers.json")?.let { values ->
+            put("server", values.count { it.id in serverIds })
         }
-        File(root, "rssSources.json").takeIf(File::isFile)?.let { file ->
-            val values = runCatching { GSON.fromJsonArray<RssSource>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("rssSource", values.count { item -> appDb.rssSourceDao.all.any { it.sourceUrl == item.sourceUrl } })
+        readJsonArrayOrNull<RssSource>(root, "rssSources.json")?.let { values ->
+            put("rssSource", values.count { it.sourceUrl in rssSourceUrls })
         }
         File(root, "replaceRule.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<ReplaceRule>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("replaceRule", values.count { item -> appDb.replaceRuleDao.all.any { it.id == item.id } })
+            if (values != null) put("replaceRule", values.count { it.id in replaceRuleIds })
         }
         File(root, "bookmark.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<Bookmark>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("bookmark", values.count { item -> appDb.bookmarkDao.all.any { it.bookName == item.bookName && it.bookAuthor == item.bookAuthor } })
+            if (values != null) put("bookmark", values.count { it.time in bookmarkTimes })
+        }
+        File(root, "bookMarking.json").takeIf(File::isFile)?.let { file ->
+            val values = runCatching { GSON.fromJsonArray<BookMarking>(file.readText()).getOrNull().orEmpty() }.getOrNull()
+            if (values != null) put("bookmark", (this["bookmark"] ?: 0) + values.count { item ->
+                item.id in markingIds
+            })
+        }
+        File(root, "bookGroup.json").takeIf(File::isFile)?.let { file ->
+            val values = runCatching { GSON.fromJsonArray<BookGroup>(file.readText()).getOrNull().orEmpty() }.getOrNull()
+            if (values != null) put("bookGroup", values.count { it.groupId in groupIds })
+        }
+        File(root, "searchHistory.json").takeIf(File::isFile)?.let { file ->
+            val values = runCatching { GSON.fromJsonArray<SearchKeyword>(file.readText()).getOrNull().orEmpty() }.getOrNull()
+            if (values != null) put("searchHistory", values.count { it.word in searchWords })
         }
         File(root, "homepageModules.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<HomepageModule>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("homepageModules", values.count { item -> appDb.homepageModuleDao.getAll().any { it.id == item.id } })
+            if (values != null) put("homepageModules", values.count { it.id in homepageModuleIds })
         }
         File(root, "homepageCustomSets.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<HomepageCustomSet>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("homepageCustomSets", values.count { item -> appDb.homepageCustomSetDao.getAll().any { it.id == item.id } })
+            if (values != null) put("homepageCustomSets", values.count { it.id in homepageSetIds })
         }
         File(root, "highlightRule.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<HighlightRule>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("highlightRule", values.count { item -> appDb.highlightRuleDao.getAll().any { it.id == item.id } })
+            if (values != null) put("highlightRule", values.count { it.id in highlightIds })
         }
         File(root, "highlightTagRule.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<HighlightTagRule>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("highlightTagRule", values.count { item -> appDb.highlightTagRuleDao.getAll().any { it.id == item.id } })
+            if (values != null) put("highlightTagRule", values.count { it.id in highlightTagIds })
         }
         File(root, "tagGroupRule.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<TagGroupRule>(file.readText()).getOrNull().orEmpty() }.getOrNull()
-            if (values != null) put("tagGroupRule", values.count { item -> appDb.tagGroupRuleDao.getAll().any { it.id == item.id } })
+            if (values != null) put("tagGroupRule", values.count { it.id in tagGroupIds })
         }
         File(root, "readRecord.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<ReadRecord>(file.readText()).getOrNull().orEmpty() }.getOrNull()
             if (values != null) put("readRecord", values.count { item ->
-                appDb.readRecordDao.all.any { existing ->
-                    existing.bookName == item.bookName && existing.bookAuthor == item.bookAuthor
-                }
+                (item.bookName to item.bookAuthor) in readRecordIds
             })
         }
         File(root, "rssStar.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<RssStar>(file.readText()).getOrNull().orEmpty() }.getOrNull()
             if (values != null) put("rssStar", values.count { item ->
-                appDb.rssStarDao.all.any { existing -> existing.origin == item.origin && existing.link == item.link }
+                (item.origin to item.link) in rssStarIds
             })
         }
-        File(root, "keyboardAssists.json").takeIf(File::isFile)?.let { file ->
+File(root, "keyboardAssists.json").takeIf(File::isFile)?.let { file ->
             val values = runCatching { GSON.fromJsonArray<KeyboardAssist>(file.readText()).getOrNull().orEmpty() }.getOrNull()
             if (values != null) put("keyboardAssists", values.count { item ->
-                appDb.keyboardAssistsDao.all.any { existing -> existing.type == item.type && existing.key == item.key }
+                (item.type to item.key) in keyboardIds
             })
+        }
+        readJsonArrayOrNull<HttpTTS>(root, "httpTTS.json")?.let { values ->
+            put("httpTTS", values.count { it.id in httpTtsIds })
+        }
+        readJsonArrayOrNull<RuleSub>(root, "sourceSub.json")?.let { values ->
+            put("sourceSub", values.count { it.id in sourceSubIds })
+        }
+        readJsonArrayOrNull<TxtTocRule>(root, "txtTocRule.json")?.let { values ->
+            put("txtTocRule", values.count { it.id in tocRuleIds })
+        }
+        readJsonArrayOrNull<DictRule>(root, "dictRule.json")?.let { values ->
+            put("dictRule", values.count { it.name in dictRuleNames })
+        }
+        File(root, DirectLinkUpload.ruleFileName).takeIf(File::isFile)?.let { file ->
+            val values = runCatching { GSON.fromJsonObject<DirectLinkUpload>(file.readText()).getOrNull() }.getOrNull()
+            if (values != null) put("directLinkUploadRule", if (ACache.get(cacheDir = false).getAsString(DirectLinkUpload.ruleFileName).isNullOrBlank()) 0 else 1)
+        }
+        File(root, "readSettings.json").takeIf(File::isFile)?.let { file ->
+            val values = runCatching { GSON.fromJsonObject<ReadSettings>(file.readText()).getOrNull() }.getOrNull()
+            if (values != null) put("readSettings", 1)
+        }
+        if (File(root, "config.xml").isFile) {
+            put("settings", 1)
+        }
+        if (File(root, ReadBookConfig.configFileName).isFile && File(ReadBookConfig.configFilePath).isFile) {
+            put("readConfig", 1)
+        }
+        if (File(root, ThemeConfigStore.configFileName).isFile && File(ThemeConfigStore.configFilePath).isFile) {
+            put("themeConfig", 1)
+        }
+        if (File(root, BookCover.configFileName).isFile && BookCover.getConfig() != null) {
+            put("coverConfig", 1)
         }
     }
 
-    private fun explicitEmptyCategories(root: File, categories: Set<String>): Set<String> =
+private fun explicitEmptyCategories(root: File, categories: Set<String>): Set<String> =
         categories.filterTo(linkedSetOf()) { category ->
             val files = root.walkTopDown().filter(File::isFile)
                 .filter { previewCategory(it.name) == category }
             files.any { it.readText().trim() == "[]" }
         }
+
+    /** 读取可能加密的 JSON 数组，预览阶段无密码时返回 null 跳过冲突统计。 */
+    private inline fun <reified T> readJsonArrayOrNull(root: File, fileName: String): List<T>? {
+        return runCatching {
+            val file = File(root, fileName)
+            if (!file.isFile) return@runCatching null
+            val text = file.readText()
+            // 如果是加密内容（非 JSON 数组），预览阶段无法解密，返回 null
+            if (!text.isJsonArray()) return@runCatching null
+            GSON.fromJsonArray<T>(text).getOrNull()
+        }.getOrNull()?.orEmpty()
+    }
 
     /** 预览阶段读取应用现有数量，不执行任何恢复写入。 */
     private fun applicationCategoryCounts(): Map<String, Int> = linkedMapOf(
@@ -283,13 +338,19 @@ object Restore : KoinComponent {
         "searchHistory" to appDb.searchKeywordDao.all.size,
         "readRecord" to appDb.readRecordDao.all.size,
         "server" to appDb.serverDao.all.size,
+        "sourceSub" to appDb.ruleSubDao.all.size,
+        "txtTocRule" to appDb.txtTocRuleDao.all.size,
+        "httpTTS" to appDb.httpTTSDao.all.size,
+        "keyboardAssists" to appDb.keyboardAssistsDao.all.size,
+        "dictRule" to appDb.dictRuleDao.all.size,
+        "homepageModules" to appDb.homepageModuleDao.getAll().size,
+        "homepageCustomSets" to appDb.homepageCustomSetDao.getAll().size,
+        "highlightRule" to appDb.highlightRuleDao.getAll().size,
+        "highlightTagRule" to appDb.highlightTagRuleDao.getAll().size,
+        "tagGroupRule" to appDb.tagGroupRuleDao.getAll().size,
     )
 
-    private fun previewCategories(): Set<String> = setOf(
-        "bookshelf", "bookmark", "bookGroup", "bookSource", "rssSource", "rssStar",
-        "replaceRule", "searchHistory", "readRecord", "server", "settings", "readConfig",
-        "themeConfig", "coverConfig", "resources",
-    )
+private fun previewCategories(): Set<String> = BackupRestoreCategoryCatalog.allCategories
 
     private fun mergedIgnoredCategories(backupIgnored: Set<String>): Set<String> = buildSet {
         addAll(backupIgnored)
@@ -306,7 +367,7 @@ object Restore : KoinComponent {
         if (BackupConfig.ignoreCoverConfig) add("coverConfig")
     }
 
-    private fun previewCategory(name: String): String = when (name) {
+private fun previewCategory(name: String): String = when (name) {
         "bookshelf.json" -> "bookshelf"
         "bookmark.json", "bookMarking.json" -> "bookmark"
         "bookGroup.json" -> "bookGroup"
@@ -320,17 +381,19 @@ object Restore : KoinComponent {
         "readConfig.json", "shareReadConfig.json" -> "readConfig"
         "themeConfig.json" -> "themeConfig"
         "assets/background" -> "resources"
+        "readSettings.json" -> "readSettings"
         else -> name.substringBeforeLast('.', name)
     }
 
-    suspend fun restore(
+suspend fun restore(
         context: Context,
         uri: Uri,
         mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
         selectedCategories: Set<String> = emptySet(),
         categoryModes: Map<String, RestoreMode> = emptyMap(),
         backupPassword: String? = null,
-    ) {
+    ): String {
+        val operationId = java.util.UUID.randomUUID().toString()
         BackupRestoreLock.withLock {
             LogUtils.d(TAG, "开始恢复备份 uri:$uri")
             val unzipResult = kotlin.runCatching {
@@ -344,27 +407,58 @@ object Restore : KoinComponent {
                 }
             }.onFailure {
                 AppLog.put("复制解压文件出错\n${it.localizedMessage}", it)
+                BackupRestoreResultBus.emit(
+                    BackupRestoreResult(
+                        operationId = operationId,
+                        outcome = BackupRestoreOutcome.FAILED,
+                        failures = 1,
+                        unzipFailed = true,
+                    )
+                )
             }
             if (unzipResult.isSuccess) {
                 kotlin.runCatching {
-                    restoreUnzipped(Backup.backupPath, mode, selectedCategories, categoryModes, backupPassword)
-                    LocalConfig.lastBackup = System.currentTimeMillis()
+                    // 旧版 ZIP 可能把备份文件放在唯一的外层目录中。
+                    val root = normalizedBackupRoot(File(Backup.backupPath))
+                    val restoreOperationId = restoreUnzipped(
+                        root.absolutePath,
+                        mode,
+                        selectedCategories,
+                        categoryModes,
+                        backupPassword,
+                        operationId,
+                    )
+                    BackupRestoreResultBus.getResult(restoreOperationId)
+                        ?.takeUnless {
+                            it.outcome == BackupRestoreOutcome.FAILED ||
+                                it.outcome == BackupRestoreOutcome.PRECONDITION_FAILED
+                        }
+                        ?.let { LocalConfig.lastBackup = System.currentTimeMillis() }
                 }.onFailure {
                     appCtx.toastOnUi("恢复备份出错\n${it.localizedMessage}")
                     AppLog.put("恢复备份出错\n${it.localizedMessage}", it)
+                    BackupRestoreResultBus.emit(
+                        BackupRestoreResult(
+                            operationId = operationId,
+                            outcome = BackupRestoreOutcome.FAILED,
+                            failures = 1,
+                            parseFailed = true,
+                        )
+                    )
                 }
             }
         }
+        return operationId
     }
 
-    suspend fun restoreLocked(
+suspend fun restoreLocked(
         path: String,
         mode: RestoreMode = RestoreMode.KEEP_APPLICATION,
         selectedCategories: Set<String> = emptySet(),
         categoryModes: Map<String, RestoreMode> = emptyMap(),
         backupPassword: String? = null,
-    ) {
-        BackupRestoreLock.withLock {
+    ): String {
+        return BackupRestoreLock.withLock {
             restoreUnzipped(path, mode, selectedCategories, categoryModes, backupPassword)
         }
     }
@@ -375,35 +469,39 @@ object Restore : KoinComponent {
         selectedCategories: Set<String> = emptySet(),
         categoryModes: Map<String, RestoreMode> = emptyMap(),
         backupPassword: String? = null,
-    ) {
+        operationId: String = java.util.UUID.randomUUID().toString(),
+    ): String {
         val scan = BackupManifestScanner.scan(File(path))
         scan.warnings.forEach { warning ->
             AppLog.put("恢复备份校验警告：$warning")
         }
         BackupRestoreProgressBus.emit(
             BackupRestoreProgress(
+                operationId,
                 stage = BackupRestoreStage.READ_BACKUP,
                 warnings = scan.warnings.size,
             )
         )
-        restore(path, mode, selectedCategories, categoryModes, backupPassword, allowLegacyPlaintextFallback = scan.legacyFormat)
+        restore(path, mode, selectedCategories, categoryModes, backupPassword, allowLegacyPlaintextFallback = scan.legacyFormat, operationId = operationId)
+        return operationId
     }
 
-    private suspend fun restore(
+private suspend fun restore(
         path: String,
         mode: RestoreMode,
         selectedCategories: Set<String>,
         categoryModes: Map<String, RestoreMode>,
         backupPassword: String? = null,
         allowLegacyPlaintextFallback: Boolean = true,
+        operationId: String,
     ) {
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.READ_BACKUP))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.READ_BACKUP))
         // 统一由 planner 决定类别是否存在、是否被忽略以及覆盖/保留模式；
         // 各 DAO 仍负责实体主键的具体合并策略。
+        val backupRestoreIgnoredCategories = BackupManifestScanner.scan(File(path)).manifest
+            ?.restoreIgnoredCategories.orEmpty()
         val categoryPlans = RestoreCategoryPlanner.planByCategory(
-            inputs = restorePlannerCategories(path).map { (category, present, ignored) ->
-                RestoreCategoryInput(category = category, backupPresent = present, ignored = ignored)
-            },
+            inputs = restorePlannerCategories(path, backupRestoreIgnoredCategories),
             modes = categoryModes,
             defaultMode = mode.takeUnless { it == RestoreMode.BY_CATEGORY } ?: RestoreMode.KEEP_APPLICATION,
         ).associateBy { it.category }
@@ -414,19 +512,34 @@ object Restore : KoinComponent {
             }
             .filter { it.first }
             .mapTo(hashSetOf()) { it.second }
+        val progressCategories = categoryPlans.values
+            .filter { it.mode != null && !it.skippedByIgnore }
+            .map { it.category }
+.toSet()
+        val reportedCategories = hashSetOf<String>()
+        fun stageForCategory(category: String): BackupRestoreStage = when (category) {
+            "bookshelf", "bookmark", "bookGroup", "bookSource", "rssSource", "rssStar", "replaceRule", "searchHistory", "readRecord", "server", "sourceSub", "txtTocRule", "httpTTS", "keyboardAssists", "dictRule", "homepageModules", "homepageCustomSets", "highlightRule", "highlightTagRule", "tagGroupRule" -> BackupRestoreStage.RESTORE_BOOKSHELF
+            "settings", "readConfig", "themeConfig", "coverConfig", "directLinkUploadRule", "readSettings" -> BackupRestoreStage.RESTORE_CONFIG
+            "resources" -> BackupRestoreStage.RESTORE_RESOURCES
+            else -> BackupRestoreStage.RESTORE_CONFIG
+        }
         fun selected(category: String): Boolean {
             val plan = categoryPlans[category]
             // 全局模式保留旧行为（例如缺少 config.xml 仍生成明确失败报告）；
             // 只有 BY_CATEGORY 才由 planner 过滤缺失/忽略类别。
-            val enabled = if (mode == RestoreMode.BY_CATEGORY) {
+            val enabled = if (mode == RestoreMode.BY_CATEGORY || mode == RestoreMode.CLEAR_THEN_RESTORE) {
                 category in selectedCategories && plan?.mode != null && !plan.skippedByIgnore
             } else {
-                true
+                // 备份 manifest 的恢复忽略和当前设备忽略在所有模式都优先于类别选择。
+                plan?.skippedByIgnore != true
             }
-            if (enabled) {
+            if (enabled && reportedCategories.add(category)) {
                 BackupRestoreProgressBus.emit(
                     BackupRestoreProgress(
-                        stage = BackupRestoreStage.RESTORE_BOOKSHELF,
+                        operationId,
+                        stage = stageForCategory(category),
+                        current = reportedCategories.size,
+                        total = progressCategories.size,
                         category = category,
                     )
                 )
@@ -436,10 +549,14 @@ object Restore : KoinComponent {
         fun useBackup(category: String): Boolean =
             if (category in explicitlyEmptyCategories) {
                 false
+            } else if (mode == RestoreMode.KEEP_APPLICATION && category in BackupRestoreCategoryCatalog.configurationCategories) {
+                // 普通恢复保留数据库中的应用独有记录，但配置文件和设置键按备份更新。
+                true
             } else if (mode == RestoreMode.BY_CATEGORY) {
-                categoryPlans[category]?.mode == RestoreMode.USE_BACKUP
+                categoryPlans[category]?.mode == RestoreMode.USE_BACKUP ||
+                    categoryPlans[category]?.mode == RestoreMode.CLEAR_THEN_RESTORE
             } else {
-                mode == RestoreMode.USE_BACKUP
+                mode == RestoreMode.USE_BACKUP || mode == RestoreMode.CLEAR_THEN_RESTORE
             }
         val aes = BackupAES(backupPassword)
         var categoryFailures = 0
@@ -447,6 +564,7 @@ object Restore : KoinComponent {
         val failedCategoryCounts = linkedMapOf<String, Int>()
         var configFileMissing = false
         var configFileParseFailed = false
+        val decryptionFailedConfigKeys = linkedSetOf<String>()
         fun reportCategoryFailure(category: String, error: Throwable) {
             categoryFailures++
             failedCategories += category
@@ -454,6 +572,7 @@ object Restore : KoinComponent {
             AppLog.put("恢复类别失败：$category\n${error.localizedMessage}", error)
             BackupRestoreProgressBus.emit(
                 BackupRestoreProgress(
+                    operationId,
                     stage = BackupRestoreStage.RESTORE_CONFIG,
                     category = category,
                     failures = categoryFailures,
@@ -463,13 +582,14 @@ object Restore : KoinComponent {
         }
         if (selected("resources")) {
             val resourceFailures = restoreBackgroundResources(path)
-            if (resourceFailures > 0) {
+if (resourceFailures > 0) {
                 categoryFailures += resourceFailures
                 failedCategories += "resources"
                 failedCategoryCounts["resources"] =
                     (failedCategoryCounts["resources"] ?: 0) + resourceFailures
                 BackupRestoreProgressBus.emit(
                     BackupRestoreProgress(
+                        operationId,
                         stage = BackupRestoreStage.RESTORE_RESOURCES,
                         failures = categoryFailures,
                         failedCategoryCounts = failedCategoryCounts.toMap(),
@@ -477,7 +597,9 @@ object Restore : KoinComponent {
                 )
             }
         }
-        if (selected("bookshelf") && BackupConfig.dbIsNotIgnored("bookshelf")) fileToListT<Book>(path, "bookshelf.json")?.let {
+        if (selected("bookshelf") && BackupConfig.dbIsNotIgnored("bookshelf")) {
+            try {
+                readListStrict<Book>(path, "bookshelf.json") { reportCategoryFailure("bookshelf", it) }?.let {
             val existingBooks = appDb.bookDao.all
             it.forEach { book ->
                 book.upType()
@@ -491,13 +613,13 @@ object Restore : KoinComponent {
             restorePlan.booksToUpsert
                 .filter { book -> book.isLocal }
                 .forEach { book -> book.coverUrl = LocalBook.getCoverPath(book) }
-            val strictReplacementDeletes = if (useBackup("bookshelf")) {
+            val strictReplacementDeletes = if (categoryPlans["bookshelf"]?.clearApplication == true) {
                 val retainedUrls = restorePlan.booksToUpsert.mapTo(hashSetOf()) { it.bookUrl }
                 existingBooks.filter { book ->
                     book.bookUrl !in retainedUrls && !(BackupConfig.ignoreLocalBook && book.isLocal)
                 }
             } else emptyList()
-            appDb.runInTransaction {
+            appDb.withTransaction {
                 val booksToDelete = (restorePlan.booksToDelete + strictReplacementDeletes)
                     .distinctBy { it.bookUrl }
                 if (booksToDelete.isNotEmpty()) {
@@ -510,128 +632,164 @@ object Restore : KoinComponent {
                     appDb.bookDao.insert(*restorePlan.booksToInsert.toTypedArray())
                 }
             }
+                }
+            } catch (error: Exception) {
+                reportCategoryFailure("bookshelf", error)
+            }
         }
-        // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
+// 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
         if (selected("bookmark") && BackupConfig.dbIsNotIgnored("bookmark")) {
             try {
                 appDb.withTransaction {
-                    fileToListT<Bookmark>(path, "bookmark.json")?.let {
-                        if (useBackup("bookmark")) appDb.bookmarkDao.deleteAll()
-                        appDb.bookmarkDao.insert(*it.toTypedArray())
+                    readListStrict<Bookmark>(path, "bookmark.json") { reportCategoryFailure("bookmark", it) }?.let { bookmarks ->
+                        val plan = categoryPlans["bookmark"]
+                        if (plan?.clearApplication == true) {
+                            appDb.bookmarkDao.deleteAll()
+                        }
+                        val existing = appDb.bookmarkDao.all.mapTo(hashSetOf()) { it.time }
+                        val (toUpdate, toInsert) = bookmarks.partition { it.time in existing }
+                        toUpdate.forEach { appDb.bookmarkDao.update(it) }
+                        appDb.bookmarkDao.insert(*toInsert.toTypedArray())
                     }
-                    fileToListT<BookMarking>(path, "bookMarking.json")?.let {
-                        if (useBackup("bookmark")) appDb.bookMarkingDao.deleteAll()
-                        appDb.bookMarkingDao.insert(*it.toTypedArray())
+                    readListStrict<BookMarking>(path, "bookMarking.json") { reportCategoryFailure("bookmark", it) }?.let { markings ->
+                        val plan = categoryPlans["bookmark"]
+                        if (plan?.clearApplication == true) {
+                            appDb.bookMarkingDao.deleteAll()
+                        }
+                        val existing = appDb.bookMarkingDao.all.mapTo(hashSetOf()) { it.id }
+                        val (toUpdate, toInsert) = markings.partition { it.id in existing }
+                        toUpdate.forEach { appDb.bookMarkingDao.upsert(it) }
+                        appDb.bookMarkingDao.insert(*toInsert.toTypedArray())
                     }
                 }
             } catch (error: Exception) {
                 reportCategoryFailure("bookmark", error)
             }
         }
-        if (selected("bookGroup") && BackupConfig.dbIsNotIgnored("bookGroup")) {
-            fileToListT<BookGroup>(path, "bookGroup.json")?.let {
-                if (useBackup("bookGroup")) appDb.bookGroupDao.replaceAll(it)
-                else runCatching {
-                    appDb.runInTransaction { it.forEach { item -> appDb.bookGroupDao.insert(item) } }
-                }.onFailure { reportCategoryFailure("bookGroup", it) }
+if (selected("bookGroup") && BackupConfig.dbIsNotIgnored("bookGroup")) {
+            readListStrict<BookGroup>(path, "bookGroup.json") { reportCategoryFailure("bookGroup", it) }?.let { groups ->
+                val plan = categoryPlans["bookGroup"]
+                try {
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.bookGroupDao.deleteAll()
+                        }
+                        val existing = appDb.bookGroupDao.all.mapTo(hashSetOf()) { it.groupId }
+                        val (toUpdate, toInsert) = groups.partition { it.groupId in existing }
+                        appDb.bookGroupDao.update(*toUpdate.toTypedArray())
+                        appDb.bookGroupDao.insert(*toInsert.toTypedArray())
+                    }
+                } catch (error: Exception) {
+                    reportCategoryFailure("bookGroup", error)
+                }
             }
         }
         if (selected("bookSource") && BackupConfig.dbIsNotIgnored("bookSource")) {
-            fileToListT<BookSource>(path, "bookSource.json")?.let {
-                try {
-                    appDb.runInTransaction {
-                        if (useBackup("bookSource")) appDb.bookSourceDao.deleteAll()
-                        val incoming = if (useBackup("bookSource")) it else {
-                            val existing = appDb.bookSourceDao.all.mapTo(hashSetOf()) { source -> source.bookSourceUrl }
-                            it.filterNot { source -> source.bookSourceUrl in existing }
-                        }
-                        appDb.bookSourceDao.insert(*incoming.toTypedArray())
+            File(path, "bookSource.json").takeIf {
+                it.exists()
+            }?.runCatching {
+                val sources = readSensitiveListStrict<BookSource>(this, aes)
+                val plan = categoryPlans["bookSource"]
+                appDb.withTransaction {
+                    if (plan?.clearApplication == true) {
+                        appDb.bookSourceDao.deleteAll()
                     }
-                } catch (error: Exception) {
-                    reportCategoryFailure("bookSource", error)
-                }
-            } ?: run {
-                val bookSourceFile = File(path, "bookSource.json")
-                if (bookSourceFile.exists()) {
-                    val json = bookSourceFile.readText()
-                    ImportOldData.importOldSource(json)
-                }
+                    val existing = appDb.bookSourceDao.all.mapTo(hashSetOf()) { it.bookSourceUrl }
+                    val (toUpdate, toInsert) = sources.partition { it.bookSourceUrl in existing }
+                    appDb.bookSourceDao.update(*toUpdate.toTypedArray())
+                    appDb.bookSourceDao.insert(*toInsert.toTypedArray())
+                        }
+            }?.onFailure {
+                reportCategoryFailure("bookSource", it)
+                AppLog.put("恢复书源配置出错\n${it.localizedMessage}", it)
             }
         }
         if (selected("rssSource") && BackupConfig.dbIsNotIgnored("rssSource")) {
-            fileToListT<RssSource>(path, "rssSources.json")?.let {
-                try {
-                    appDb.runInTransaction {
-                        if (useBackup("rssSource")) appDb.rssSourceDao.deleteAll()
-                        val incoming = if (useBackup("rssSource")) it else {
-                            val existing = appDb.rssSourceDao.all.mapTo(hashSetOf()) { source -> source.sourceUrl }
-                            it.filterNot { source -> source.sourceUrl in existing }
-                        }
-                        appDb.rssSourceDao.insert(*incoming.toTypedArray())
+            File(path, "rssSources.json").takeIf {
+                it.exists()
+            }?.runCatching {
+                val sources = readSensitiveListStrict<RssSource>(this, aes)
+                val plan = categoryPlans["rssSource"]
+                appDb.withTransaction {
+                    if (plan?.clearApplication == true) {
+                        appDb.rssSourceDao.deleteAll()
                     }
-                } catch (error: Exception) {
-                    reportCategoryFailure("rssSource", error)
-                }
+                    val existing = appDb.rssSourceDao.all.mapTo(hashSetOf()) { it.sourceUrl }
+                    val (toUpdate, toInsert) = sources.partition { it.sourceUrl in existing }
+                    appDb.rssSourceDao.update(*toUpdate.toTypedArray())
+                    appDb.rssSourceDao.insert(*toInsert.toTypedArray())
+                        }
+            }?.onFailure {
+                reportCategoryFailure("rssSource", it)
+                AppLog.put("恢复 RSS 配置出错\n${it.localizedMessage}", it)
             }
         }
-        if (selected("rssStar") && BackupConfig.dbIsNotIgnored("rssStar")) {
-            fileToListT<RssStar>(path, "rssStar.json")?.let {
+if (selected("rssStar") && BackupConfig.dbIsNotIgnored("rssStar")) {
+            readListStrict<RssStar>(path, "rssStar.json") { reportCategoryFailure("rssStar", it) }?.let { stars ->
+                val plan = categoryPlans["rssStar"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("rssStar")) appDb.rssStarDao.deleteAll()
-                        val incoming = if (useBackup("rssStar")) it else {
-                            val existing = appDb.rssStarDao.all.mapTo(hashSetOf()) { star -> star.origin to star.link }
-                            it.filterNot { star -> (star.origin to star.link) in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.rssStarDao.deleteAll()
                         }
-                        appDb.rssStarDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.rssStarDao.all.mapTo(hashSetOf()) { "${it.origin}|${it.link}" }
+                        val (toUpdate, toInsert) = stars.partition { "${it.origin}|${it.link}" in existing }
+                        appDb.rssStarDao.update(*toUpdate.toTypedArray())
+                        appDb.rssStarDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("rssStar", error)
                 }
             }
         }
-        if (selected("replaceRule") && BackupConfig.dbIsNotIgnored("replaceRule")) {
-            fileToListT<ReplaceRule>(path, "replaceRule.json")?.let {
+if (selected("replaceRule") && BackupConfig.dbIsNotIgnored("replaceRule")) {
+            readListStrict<ReplaceRule>(path, "replaceRule.json") { reportCategoryFailure("replaceRule", it) }?.let { rules ->
+                val plan = categoryPlans["replaceRule"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("replaceRule")) appDb.replaceRuleDao.deleteAll()
-                        val incoming = if (useBackup("replaceRule")) it else {
-                            val existing = appDb.replaceRuleDao.all.mapTo(hashSetOf()) { rule -> rule.id }
-                            it.filterNot { rule -> rule.id in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.replaceRuleDao.deleteAll()
                         }
-                        appDb.replaceRuleDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.replaceRuleDao.all.mapTo(hashSetOf()) { it.id }
+                        val (toUpdate, toInsert) = rules.partition { it.id in existing }
+                        appDb.replaceRuleDao.update(*toUpdate.toTypedArray())
+                        appDb.replaceRuleDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("replaceRule", error)
                 }
             }
         }
-        if (selected("searchHistory") && BackupConfig.dbIsNotIgnored("searchHistory")) {
-            fileToListT<SearchKeyword>(path, "searchHistory.json")?.let {
+if (selected("searchHistory") && BackupConfig.dbIsNotIgnored("searchHistory")) {
+            readListStrict<SearchKeyword>(path, "searchHistory.json") { reportCategoryFailure("searchHistory", it) }?.let { keywords ->
+                val plan = categoryPlans["searchHistory"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("searchHistory")) appDb.searchKeywordDao.deleteAll()
-                        val incoming = if (useBackup("searchHistory")) it else {
-                            val existing = appDb.searchKeywordDao.all.mapTo(hashSetOf()) { keyword -> keyword.word }
-                            it.filterNot { keyword -> keyword.word in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.searchKeywordDao.deleteAll()
                         }
-                        appDb.searchKeywordDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.searchKeywordDao.all.mapTo(hashSetOf()) { it.word }
+                        val (toUpdate, toInsert) = keywords.partition { it.word in existing }
+                        appDb.searchKeywordDao.update(*toUpdate.toTypedArray())
+                        appDb.searchKeywordDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("searchHistory", error)
                 }
             }
         }
-        if (selected("sourceSub") && BackupConfig.dbIsNotIgnored("sourceSub")) {
-            fileToListT<RuleSub>(path, "sourceSub.json")?.let {
+if (selected("sourceSub") && BackupConfig.dbIsNotIgnored("sourceSub")) {
+            readListStrict<RuleSub>(path, "sourceSub.json") { reportCategoryFailure("sourceSub", it) }?.let { subs ->
+                val plan = categoryPlans["sourceSub"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("sourceSub")) appDb.ruleSubDao.deleteAll()
-                        val incoming = if (useBackup("sourceSub")) it else {
-                            val existing = appDb.ruleSubDao.all.mapTo(hashSetOf()) { item -> item.id }
-                            it.filterNot { item -> item.id in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.ruleSubDao.deleteAll()
                         }
-                        appDb.ruleSubDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.ruleSubDao.all.mapTo(hashSetOf()) { it.id }
+                        val (toUpdate, toInsert) = subs.partition { it.id in existing }
+                        appDb.ruleSubDao.update(*toUpdate.toTypedArray())
+                        appDb.ruleSubDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("sourceSub", error)
@@ -639,15 +797,17 @@ object Restore : KoinComponent {
             }
         }
         if (selected("txtTocRule") && BackupConfig.dbIsNotIgnored("txtTocRule")) {
-            fileToListT<TxtTocRule>(path, "txtTocRule.json")?.let {
+            readListStrict<TxtTocRule>(path, "txtTocRule.json") { reportCategoryFailure("txtTocRule", it) }?.let { rules ->
+                val plan = categoryPlans["txtTocRule"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("txtTocRule")) appDb.txtTocRuleDao.deleteAll()
-                        val incoming = if (useBackup("txtTocRule")) it else {
-                            val existing = appDb.txtTocRuleDao.all.mapTo(hashSetOf()) { item -> item.id }
-                            it.filterNot { item -> item.id in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.txtTocRuleDao.deleteAll()
                         }
-                        appDb.txtTocRuleDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.txtTocRuleDao.all.mapTo(hashSetOf()) { it.id }
+                        val (toUpdate, toInsert) = rules.partition { it.id in existing }
+                        appDb.txtTocRuleDao.update(*toUpdate.toTypedArray())
+                        appDb.txtTocRuleDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("txtTocRule", error)
@@ -655,47 +815,55 @@ object Restore : KoinComponent {
             }
         }
         if (selected("httpTTS") && BackupConfig.dbIsNotIgnored("httpTTS")) {
-            fileToListT<HttpTTS>(path, "httpTTS.json")?.let {
-                try {
-                    appDb.runInTransaction {
-                        if (useBackup("httpTTS")) appDb.httpTTSDao.deleteAll()
-                        val incoming = if (useBackup("httpTTS")) it else {
-                            val existing = appDb.httpTTSDao.all.mapTo(hashSetOf()) { item -> item.id }
-                            it.filterNot { item -> item.id in existing }
-                        }
-                        appDb.httpTTSDao.insert(*incoming.toTypedArray())
+            File(path, "httpTTS.json").takeIf {
+                it.exists()
+            }?.runCatching {
+                val ttss = readSensitiveListStrict<HttpTTS>(this, aes)
+                val plan = categoryPlans["httpTTS"]
+                appDb.withTransaction {
+                    if (plan?.clearApplication == true) {
+                        appDb.httpTTSDao.deleteAll()
                     }
-                } catch (error: Exception) {
-                    reportCategoryFailure("httpTTS", error)
-                }
+                    val existing = appDb.httpTTSDao.all.mapTo(hashSetOf()) { it.id }
+                    val (toUpdate, toInsert) = ttss.partition { it.id in existing }
+                    appDb.httpTTSDao.update(*toUpdate.toTypedArray())
+                    appDb.httpTTSDao.insert(*toInsert.toTypedArray())
+                        }
+            }?.onFailure {
+                reportCategoryFailure("httpTTS", it)
+                AppLog.put("恢复 HTTP TTS 配置出错\n${it.localizedMessage}", it)
             }
         }
         if (selected("dictRule") && BackupConfig.dbIsNotIgnored("dictRule")) {
-            fileToListT<DictRule>(path, "dictRule.json")?.let {
+            readListStrict<DictRule>(path, "dictRule.json") { reportCategoryFailure("dictRule", it) }?.let { rules ->
+                val plan = categoryPlans["dictRule"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("dictRule")) appDb.dictRuleDao.deleteAll()
-                        val incoming = if (useBackup("dictRule")) it else {
-                            val existing = appDb.dictRuleDao.all.mapTo(hashSetOf()) { item -> item.name }
-                            it.filterNot { item -> item.name in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.dictRuleDao.deleteAll()
                         }
-                        appDb.dictRuleDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.dictRuleDao.all.mapTo(hashSetOf()) { it.name }
+                        val (toUpdate, toInsert) = rules.partition { it.name in existing }
+                        appDb.dictRuleDao.update(*toUpdate.toTypedArray())
+                        appDb.dictRuleDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("dictRule", error)
                 }
             }
         }
-        if (selected("keyboardAssists") && BackupConfig.dbIsNotIgnored("keyboardAssists")) {
-            fileToListT<KeyboardAssist>(path, "keyboardAssists.json")?.let {
+if (selected("keyboardAssists") && BackupConfig.dbIsNotIgnored("keyboardAssists")) {
+            readListStrict<KeyboardAssist>(path, "keyboardAssists.json") { reportCategoryFailure("keyboardAssists", it) }?.let { assists ->
+                val plan = categoryPlans["keyboardAssists"]
                 try {
-                    appDb.runInTransaction {
-                        if (useBackup("keyboardAssists")) appDb.keyboardAssistsDao.deleteAll()
-                        val incoming = if (useBackup("keyboardAssists")) it else {
-                            val existing = appDb.keyboardAssistsDao.all.mapTo(hashSetOf()) { item -> item.type to item.key }
-                            it.filterNot { item -> (item.type to item.key) in existing }
+                    appDb.withTransaction {
+                        if (plan?.clearApplication == true) {
+                            appDb.keyboardAssistsDao.deleteAll()
                         }
-                        appDb.keyboardAssistsDao.insert(*incoming.toTypedArray())
+                        val existing = appDb.keyboardAssistsDao.all.mapTo(hashSetOf()) { "${it.type}|${it.key}" }
+                        val (toUpdate, toInsert) = assists.partition { "${it.type}|${it.key}" in existing }
+                        appDb.keyboardAssistsDao.update(*toUpdate.toTypedArray())
+                        appDb.keyboardAssistsDao.insert(*toInsert.toTypedArray())
                     }
                 } catch (error: Exception) {
                     reportCategoryFailure("keyboardAssists", error)
@@ -703,118 +871,142 @@ object Restore : KoinComponent {
             }
         }
         if (selected("homepageModules") && BackupConfig.dbIsNotIgnored("homepageModules")) {
-            fileToListT<HomepageModule>(path, "homepageModules.json")?.let {
-                if (useBackup("homepageModules")) appDb.homepageModuleDao.replaceAll(it)
-                else {
-                    val existing = appDb.homepageModuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
-                    try {
-                        appDb.homepageModuleDao.upsertAll(it.filterNot { item -> item.id in existing })
-                    } catch (error: Exception) {
-                        reportCategoryFailure("homepageModules", error)
+            readListStrict<HomepageModule>(path, "homepageModules.json") { reportCategoryFailure("homepageModules", it) }?.let {
+                try {
+                    appDb.withTransaction {
+                        if (categoryPlans["homepageModules"]?.clearApplication == true) {
+                            appDb.homepageModuleDao.replaceAll(it)
+                        } else {
+                            appDb.homepageModuleDao.upsertAll(it)
+                        }
                     }
+                } catch (error: Exception) {
+                    reportCategoryFailure("homepageModules", error)
                 }
             }
         }
         if (selected("homepageCustomSets") && BackupConfig.dbIsNotIgnored("homepageCustomSets")) {
-            fileToListT<HomepageCustomSet>(path, "homepageCustomSets.json")?.let {
-                if (useBackup("homepageCustomSets")) appDb.homepageCustomSetDao.replaceAll(it)
-                else {
-                    val existing = appDb.homepageCustomSetDao.getAll().mapTo(hashSetOf()) { item -> item.id }
-                    runCatching { appDb.homepageCustomSetDao.insertAll(it.filterNot { item -> item.id in existing }) }
-                        .onFailure { reportCategoryFailure("homepageCustomSets", it) }
-                }
+            readListStrict<HomepageCustomSet>(path, "homepageCustomSets.json") { reportCategoryFailure("homepageCustomSets", it) }?.let {
+                runCatching {
+                    appDb.withTransaction {
+                        if (categoryPlans["homepageCustomSets"]?.clearApplication == true) {
+                            appDb.homepageCustomSetDao.replaceAll(it)
+                        } else {
+                            it.forEach { item -> appDb.homepageCustomSetDao.upsert(item) }
+                        }
+                    }
+                }.onFailure { reportCategoryFailure("homepageCustomSets", it) }
             }
         }
         if (selected("highlightRule") && BackupConfig.dbIsNotIgnored("highlightRule")) {
-            fileToListT<HighlightRule>(path, "highlightRule.json")?.let {
-                if (useBackup("highlightRule")) appDb.highlightRuleDao.replaceAll(it)
-                else {
-                    val existing = appDb.highlightRuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
-                    runCatching { appDb.highlightRuleDao.insertAll(it.filterNot { item -> item.id in existing }) }
-                        .onFailure { reportCategoryFailure("highlightRule", it) }
-                }
+            readListStrict<HighlightRule>(path, "highlightRule.json") { reportCategoryFailure("highlightRule", it) }?.let {
+                runCatching {
+                    appDb.withTransaction {
+                        if (categoryPlans["highlightRule"]?.clearApplication == true) {
+                            appDb.highlightRuleDao.replaceAll(it)
+                        } else {
+                            val existing = appDb.highlightRuleDao.getAll()
+                            val byId = existing.associateBy { item -> item.id }.toMutableMap()
+                            val byIdentity = existing.associateBy(::highlightRuleIdentity).toMutableMap()
+                            it.distinctBy(::highlightRuleIdentity).forEach { item ->
+                                val matched = byId[item.id] ?: byIdentity[highlightRuleIdentity(item)]
+                                if (matched != null) {
+                                    val normalized = item.copy(id = matched.id)
+                                    appDb.highlightRuleDao.update(normalized)
+                                    byId[matched.id] = normalized
+                                    byIdentity[highlightRuleIdentity(normalized)] = normalized
+                                } else {
+                                    appDb.highlightRuleDao.insertAll(listOf(item))
+                                    byId[item.id] = item
+                                    byIdentity[highlightRuleIdentity(item)] = item
+                                }
+                            }
+                        }
+                    }
+                }.onFailure { reportCategoryFailure("highlightRule", it) }
             }
         }
         if (selected("highlightTagRule") && BackupConfig.dbIsNotIgnored("highlightTagRule")) {
-            fileToListT<HighlightTagRule>(path, "highlightTagRule.json")?.let {
-                if (useBackup("highlightTagRule")) appDb.highlightTagRuleDao.replaceAll(it)
-                else {
-                    val existing = appDb.highlightTagRuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
-                    try {
-                        appDb.highlightTagRuleDao.insert(*it.filterNot { item -> item.id in existing }.toTypedArray())
-                    } catch (error: Exception) {
-                        reportCategoryFailure("highlightTagRule", error)
+            readListStrict<HighlightTagRule>(path, "highlightTagRule.json") { reportCategoryFailure("highlightTagRule", it) }?.let {
+                runCatching {
+                    appDb.withTransaction {
+                        if (categoryPlans["highlightTagRule"]?.clearApplication == true) {
+                            appDb.highlightTagRuleDao.replaceAll(it)
+                        } else {
+                            val existing = appDb.highlightTagRuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
+                            appDb.highlightTagRuleDao.update(*it.filter { item -> item.id in existing }.toTypedArray())
+                            appDb.highlightTagRuleDao.insert(*it.filter { item -> item.id !in existing }.toTypedArray())
+                        }
                     }
-                }
+                }.onFailure { reportCategoryFailure("highlightTagRule", it) }
             }
         }
         if (selected("tagGroupRule") && BackupConfig.dbIsNotIgnored("tagGroupRule")) {
-            fileToListT<TagGroupRule>(path, "tagGroupRule.json")?.let {
-                if (useBackup("tagGroupRule")) appDb.tagGroupRuleDao.replaceAll(it)
-                else {
-                    val existing = appDb.tagGroupRuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
-                    try {
-                        appDb.tagGroupRuleDao.insert(*it.filterNot { item -> item.id in existing }.toTypedArray())
-                    } catch (error: Exception) {
-                        reportCategoryFailure("tagGroupRule", error)
+            readListStrict<TagGroupRule>(path, "tagGroupRule.json") { reportCategoryFailure("tagGroupRule", it) }?.let {
+                runCatching {
+                    appDb.withTransaction {
+                        if (categoryPlans["tagGroupRule"]?.clearApplication == true) {
+                            appDb.tagGroupRuleDao.replaceAll(it)
+                        } else {
+                            val existing = appDb.tagGroupRuleDao.getAll().mapTo(hashSetOf()) { item -> item.id }
+                            appDb.tagGroupRuleDao.update(*it.filter { item -> item.id in existing }.toTypedArray())
+                            appDb.tagGroupRuleDao.insert(*it.filter { item -> item.id !in existing }.toTypedArray())
+                        }
                     }
-                }
+                }.onFailure { reportCategoryFailure("tagGroupRule", it) }
             }
         }
-        if (selected("readRecord") && BackupConfig.dbIsNotIgnored("readRecord")) {
-            appDb.withTransaction {
-                if (useBackup("readRecord")) {
-                    appDb.readRecordDao.clear()
-                    appDb.readRecordDao.clearDetails()
-                    appDb.readRecordDao.clearSessions()
-                }
-                fileToListT<ReadRecord>(path, "readRecord.json")?.forEach { readRecord ->
-                    try { restoreReadRecord(readRecord) } catch (error: Exception) { reportCategoryFailure("readRecord", error) }
-                }
-                fileToListT<ReadRecordDetail>(path, "readRecordDetail.json")?.forEach { detail ->
-                    try { restoreReadRecordDetail(detail) } catch (error: Exception) { reportCategoryFailure("readRecord", error) }
-                }
-                fileToListT<ReadRecordSession>(path, "readRecordSession.json")?.forEach { session ->
-                    try { restoreReadRecordSession(session) } catch (error: Exception) { reportCategoryFailure("readRecord", error) }
+if (selected("readRecord") && BackupConfig.dbIsNotIgnored("readRecord")) {
+            val records = readListStrict<ReadRecord>(path, "readRecord.json") { reportCategoryFailure("readRecord", it) }
+            val details = readListStrict<ReadRecordDetail>(path, "readRecordDetail.json") { reportCategoryFailure("readRecord", it) }
+            val sessions = readListStrict<ReadRecordSession>(path, "readRecordSession.json") { reportCategoryFailure("readRecord", it) }
+            val parseFailed = (File(path, "readRecord.json").isFile && records == null) ||
+                (File(path, "readRecordDetail.json").isFile && details == null) ||
+                (File(path, "readRecordSession.json").isFile && sessions == null)
+            if (!parseFailed) {
+                try {
+                    appDb.withTransaction {
+                        if (categoryPlans["readRecord"]?.clearApplication == true) {
+                            appDb.readRecordDao.clear()
+                            appDb.readRecordDao.clearDetails()
+                            appDb.readRecordDao.clearSessions()
+                        }
+                        records.orEmpty().forEach { restoreReadRecord(it) }
+                        details.orEmpty().forEach { restoreReadRecordDetail(it) }
+                        sessions.orEmpty().forEach { restoreReadRecordSession(it) }
+                        // 归一化和汇总重算属于阅读记录同一类别，必须和导入处于同一事务。
+                        reconcileReadRecordAliases()
+                        get<ReadRecordRepository>().reconcileRestoredReadRecordTotals()
+                    }
+                } catch (error: Exception) {
+                    reportCategoryFailure("readRecord", error)
                 }
             }
-            reconcileReadRecordAliases()
-            // 会话导入按身份去重（幂等），汇总/明细取较大值后按会话重算，
-            // 避免同一备份重复导入导致阅读时长翻倍。
-            get<ReadRecordRepository>().reconcileRestoredReadRecordTotals()
         }
         if (selected("server") && BackupConfig.dbIsNotIgnored("server")) {
             File(path, "servers.json").takeIf {
                 it.exists()
             }?.runCatching {
-                var json = readText()
-                if (!json.isJsonArray()) {
-                    json = aes.decryptStr(json)
-                }
-                    GSON.fromJsonArray<Server>(json).getOrNull()?.let {
-                        try {
-                        appDb.runInTransaction {
-                            if (useBackup("server")) appDb.serverDao.deleteAll()
-                            val incoming = if (useBackup("server")) it else {
-                                val existing = appDb.serverDao.all.mapTo(hashSetOf()) { server -> server.id }
-                                it.filterNot { server -> server.id in existing }
-                            }
-                            appDb.serverDao.insert(*incoming.toTypedArray())
-                        }
-                    } catch (error: Exception) {
-                        reportCategoryFailure("server", error)
-                    }
+                val servers = readSensitiveListStrict<Server>(this, aes)
+                appDb.withTransaction {
+                    if (categoryPlans["server"]?.clearApplication == true) appDb.serverDao.deleteAll()
+                    val existing = appDb.serverDao.all.mapTo(hashSetOf()) { server -> server.id }
+                    appDb.serverDao.update(*servers.filter { server -> server.id in existing }.toTypedArray())
+                    appDb.serverDao.insert(*servers.filter { server -> server.id !in existing }.toTypedArray())
                 }
             }?.onFailure {
                 reportCategoryFailure("server", it)
                 AppLog.put("恢复服务器配置出错\n${it.localizedMessage}", it)
             }
         }
-        File(path, DirectLinkUpload.ruleFileName).takeIf {
+File(path, DirectLinkUpload.ruleFileName).takeIf {
             selected("directLinkUploadRule") &&
             it.exists()
         }?.runCatching {
-            val json = readText()
+            var json = readText()
+            if (!json.isJson()) {
+                json = BackupSensitiveEnvelope.decrypt(aes, json)
+            }
             if (!json.isJson()) error("直链上传配置格式无效")
             val cache = ACache.get(cacheDir = false)
             if (useBackup("directLinkUploadRule") || cache.getAsString(DirectLinkUpload.ruleFileName).isNullOrBlank()) {
@@ -895,23 +1087,27 @@ object Restore : KoinComponent {
             )
         }
         // 恢复配置文件 (手动解析 XML，替代反射逻辑)
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_CONFIG))
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.RESTORE_CONFIG))
         val configFile = File(path, "config.xml")
         if (selected("settings") && !configFile.exists()) {
             configFileMissing = true
             reportCategoryFailure("settings", NoStackTraceException("备份缺少 config.xml"))
-        } else if (selected("settings")) {
+} else if (selected("settings")) {
             try {
                 val map = readXmlToMap(configFile)
                 if (map.isNotEmpty()) {
-                    applyConfigMap(
+                    val decryptionFailures = applyConfigMap(
                         map,
                         aes,
                         if (useBackup("settings")) RestoreMode.USE_BACKUP else RestoreMode.KEEP_APPLICATION,
                         allowLegacyPlaintextFallback,
                     )
-                    map[PreferKey.textSelectMenuConfig]?.toString()?.let { menuConfig ->
-                        get<ReadSettingsGateway>().update { it.copy(textSelectMenuConfig = menuConfig) }
+                    decryptionFailedConfigKeys += decryptionFailures
+                    if (decryptionFailures.isNotEmpty()) {
+                        reportCategoryFailure(
+                            "settings",
+                            NoStackTraceException("配置敏感字段解密失败：${decryptionFailures.joinToString()}"),
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -920,42 +1116,70 @@ object Restore : KoinComponent {
                 AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
             }
         }
-        // 所有独立配置与 config.xml 写入完成后再刷新运行时快照，避免读取到半成品。
-        get<ReadStyleGateway>().refresh()
-        ReadConfigUpdateBus.post(
-            setOf(
-                ConfigUpdateAction.UpdateBackground,
-                ConfigUpdateAction.UpdateStyle,
-                ConfigUpdateAction.ReloadContent,
-            )
-        )
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_BOOKSHELF))
-
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.RESTORE_RESOURCES))
-
-        appCtx.toastOnUi(R.string.restore_success)
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.REFRESH_RUNTIME))
-        withContext(Main) {
-            delay(100)
-            get<AppLocaleGateway>().apply { setLanguage(currentLanguage) }
-            if (!BuildConfig.DEBUG) {
-                LauncherIconHelp.changeIcon(appCtx.getPrefString(PreferKey.launcherIcon))
-            }
-            ThemeConfigStore.applyDayNight(appCtx)
+        // 恢复完整 ReadSettings（文本选择菜单、阅读器 UI 设置等）
+        File(path, "readSettings.json").takeIf {
+            it.isFile && selected("readSettings") && useBackup("readSettings")
+        }?.runCatching {
+            val json = readText()
+            get<ReadSettingsGateway>().importJson(json)
+        }?.onFailure {
+            reportCategoryFailure("readSettings", it)
+            AppLog.put("恢复阅读设置出错\n${it.localizedMessage}", it)
         }
-        BackupRestoreProgressBus.emit(BackupRestoreProgress(BackupRestoreStage.COMPLETE))
-        BackupRestoreResultBus.emit(
+        // 所有独立配置与 config.xml 写入完成后再刷新运行时快照，避免读取到半成品。
+        runCatching { get<ReadStyleGateway>().refresh() }.onFailure {
+            reportCategoryFailure("readConfig", it)
+            AppLog.put("恢复后刷新阅读配置失败\n${it.localizedMessage}", it)
+        }
+        runCatching {
+            ReadConfigUpdateBus.post(
+                setOf(
+                    ConfigUpdateAction.UpdateBackground,
+                    ConfigUpdateAction.UpdateStyle,
+                    ConfigUpdateAction.ReloadContent,
+                    ConfigUpdateAction.RefreshTextSelectionMenu,
+                )
+            )
+        }.onFailure {
+            reportCategoryFailure("readConfig", it)
+            AppLog.put("恢复后通知阅读配置失败\n${it.localizedMessage}", it)
+        }
+
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.REFRESH_RUNTIME))
+        runCatching {
+            withContext(Main) {
+                delay(100)
+                get<AppLocaleGateway>().apply { setLanguage(currentLanguage) }
+                if (!BuildConfig.DEBUG) {
+                    LauncherIconHelp.changeIcon(appCtx.getPrefString(PreferKey.launcherIcon))
+                }
+                ThemeConfigStore.applyDayNight(appCtx)
+            }
+        }.onFailure {
+            reportCategoryFailure("settings", it)
+            AppLog.put("恢复后应用主题/语言状态失败\n${it.localizedMessage}", it)
+        }
+        BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.COMPLETE))
+        val categoryStats = categoryPlans.values.associate { plan ->
+            plan.category to plan.toStats(failedCategoryCounts[plan.category] ?: 0)
+        }
+BackupRestoreResultBus.emit(
             BackupRestoreResult(
-                outcome = when {
-                    failedCategories.isEmpty() -> BackupRestoreOutcome.SUCCESS
-                    failedCategories.size < 3 -> BackupRestoreOutcome.PARTIAL
-                    else -> BackupRestoreOutcome.FAILED
-                },
+                operationId = operationId,
+                // 结果按本次实际尝试的类别集合判断，不再用“失败类别数量 < 3”的固定阈值。
+                outcome = classifyRestoreOutcome(
+                    failedCategories = failedCategories,
+                    attemptedCategories = progressCategories,
+                    configFileMissing = configFileMissing,
+                    configFileParseFailed = configFileParseFailed,
+                ),
                 failures = categoryFailures,
                 failedCategories = failedCategories,
                 failedCategoryCounts = failedCategoryCounts.toMap(),
+                categoryStats = categoryStats,
                 configFileMissing = configFileMissing,
                 configFileParseFailed = configFileParseFailed,
+                decryptionFailedConfigKeyNames = decryptionFailedConfigKeys.toSet(),
             )
         )
     }
@@ -985,43 +1209,137 @@ object Restore : KoinComponent {
         }
     }
 
-    private fun restorePlannerCategories(path: String): List<Triple<String, Boolean, Boolean>> =
-        listOf(
-            "resources" to File(path, "assets").exists(),
-            "bookshelf" to File(path, "bookshelf.json").isFile,
-            "bookmark" to File(path, "bookmark.json").isFile,
-            "bookGroup" to File(path, "bookGroup.json").isFile,
-            "bookSource" to File(path, "bookSource.json").isFile,
-            "rssSource" to File(path, "rssSources.json").isFile,
-            "rssStar" to File(path, "rssStar.json").isFile,
-            "replaceRule" to File(path, "replaceRule.json").isFile,
-            "searchHistory" to File(path, "searchHistory.json").isFile,
-            "readRecord" to File(path, "readRecord.json").isFile,
-            "server" to File(path, "servers.json").isFile,
-            "sourceSub" to File(path, "sourceSub.json").isFile,
-            "txtTocRule" to File(path, "txtTocRule.json").isFile,
-            "httpTTS" to File(path, "httpTTS.json").isFile,
-            "keyboardAssists" to File(path, "keyboardAssists.json").isFile,
-            "dictRule" to File(path, "dictRule.json").isFile,
-            "homepageModules" to File(path, "homepageModules.json").isFile,
-            "homepageCustomSets" to File(path, "homepageCustomSets.json").isFile,
-            "highlightRule" to File(path, "highlightRule.json").isFile,
-            "highlightTagRule" to File(path, "highlightTagRule.json").isFile,
-            "tagGroupRule" to File(path, "tagGroupRule.json").isFile,
-            "settings" to File(path, "config.xml").isFile,
-            "readConfig" to File(path, ReadBookConfig.configFileName).isFile,
-            "themeConfig" to File(path, ThemeConfigStore.configFileName).isFile,
-            "coverConfig" to File(path, BookCover.configFileName).isFile,
-            "directLinkUploadRule" to File(path, DirectLinkUpload.ruleFileName).isFile,
-        ).map { (category, present) ->
-            Triple(category, present, when {
+private fun restorePlannerCategories(
+    path: String,
+    backupRestoreIgnoredCategories: Set<String> = emptySet(),
+): List<RestoreCategoryInput> {
+        return BackupRestoreCategoryCatalog.databaseFiles.map { (category, fileName) ->
+            val file = File(path, fileName)
+            val present = file.isFile
+            val ignored = when {
+                category in backupRestoreIgnoredCategories -> true
                 category in BackupConfig.dbIgnoreConfig.filterValues { it }.keys -> true
-                category == "readConfig" -> BackupConfig.ignoreReadConfig
-                category == "themeConfig" -> BackupConfig.ignoreThemeConfig
-                category == "coverConfig" -> BackupConfig.ignoreCoverConfig
                 else -> false
-            })
+            }
+            val backupIds = if (present) getBackupItemIds(category, file) else emptySet<String>()
+            val appIds = getApplicationItemIds(category)
+            RestoreCategoryInput(
+                category = category,
+                backupPresent = present,
+                backupItemIds = backupIds,
+                applicationItemIds = appIds,
+                ignored = ignored,
+            )
+        } + listOf(
+            // 文件型类别用稳定的虚拟身份参与统计，避免主题和阅读配置恢复后结果仍显示为 0。
+            RestoreCategoryInput(
+                category = "resources",
+                backupPresent = File(path, "assets").exists(),
+                backupItemIds = setOf("resources").takeIf { File(path, "assets").exists() }.orEmpty(),
+                ignored = "resources" in backupRestoreIgnoredCategories,
+            ),
+            RestoreCategoryInput(
+                category = "settings",
+                backupPresent = File(path, "config.xml").isFile,
+                backupItemIds = setOf("settings").takeIf { File(path, "config.xml").isFile }.orEmpty(),
+                ignored = "settings" in backupRestoreIgnoredCategories,
+            ),
+            RestoreCategoryInput(
+                category = "readConfig",
+                backupPresent = File(path, ReadBookConfig.configFileName).isFile,
+                backupItemIds = setOf("readConfig").takeIf { File(path, ReadBookConfig.configFileName).isFile }.orEmpty(),
+                ignored = "readConfig" in backupRestoreIgnoredCategories || BackupConfig.ignoreReadConfig,
+            ),
+            RestoreCategoryInput(
+                category = "themeConfig",
+                backupPresent = File(path, ThemeConfigStore.configFileName).isFile,
+                backupItemIds = setOf("themeConfig").takeIf { File(path, ThemeConfigStore.configFileName).isFile }.orEmpty(),
+                ignored = "themeConfig" in backupRestoreIgnoredCategories || BackupConfig.ignoreThemeConfig,
+            ),
+            RestoreCategoryInput(
+                category = "coverConfig",
+                backupPresent = File(path, BookCover.configFileName).isFile,
+                backupItemIds = setOf("coverConfig").takeIf { File(path, BookCover.configFileName).isFile }.orEmpty(),
+                ignored = "coverConfig" in backupRestoreIgnoredCategories || BackupConfig.ignoreCoverConfig,
+            ),
+            RestoreCategoryInput(
+                category = "directLinkUploadRule",
+                backupPresent = File(path, DirectLinkUpload.ruleFileName).isFile,
+                backupItemIds = setOf("directLinkUploadRule").takeIf { File(path, DirectLinkUpload.ruleFileName).isFile }.orEmpty(),
+                ignored = "directLinkUploadRule" in backupRestoreIgnoredCategories,
+            ),
+            RestoreCategoryInput(
+                category = "readSettings",
+                backupPresent = File(path, "readSettings.json").isFile,
+                backupItemIds = setOf("readSettings").takeIf { File(path, "readSettings.json").isFile }.orEmpty(),
+                ignored = "readSettings" in backupRestoreIgnoredCategories,
+            ),
+        )
+    }
+
+    private fun getBackupItemIds(category: String, file: File): Set<String> {
+        return try {
+            when (category) {
+                "bookshelf" -> GSON.fromJsonArray<Book>(file.readText()).getOrNull().orEmpty().map { it.bookUrl }.toSet()
+                "bookmark" -> GSON.fromJsonArray<Bookmark>(file.readText()).getOrNull().orEmpty().map { it.time.toString() }.toSet()
+                "bookGroup" -> GSON.fromJsonArray<BookGroup>(file.readText()).getOrNull().orEmpty().map { it.groupId.toString() }.toSet()
+                "bookSource" -> GSON.fromJsonArray<BookSource>(file.readText()).getOrNull().orEmpty().map { it.bookSourceUrl }.toSet()
+                "rssSource" -> GSON.fromJsonArray<RssSource>(file.readText()).getOrNull().orEmpty().map { it.sourceUrl }.toSet()
+                "rssStar" -> GSON.fromJsonArray<RssStar>(file.readText()).getOrNull().orEmpty().map { "${it.origin}|${it.link}" }.toSet()
+                "replaceRule" -> GSON.fromJsonArray<ReplaceRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "searchHistory" -> GSON.fromJsonArray<SearchKeyword>(file.readText()).getOrNull().orEmpty().map { it.word }.toSet()
+                "readRecord" -> GSON.fromJsonArray<ReadRecord>(file.readText()).getOrNull().orEmpty().map { "${it.bookName}|${it.bookAuthor}" }.toSet()
+                "server" -> {
+                    var json = file.readText()
+                    if (!json.isJsonArray()) {
+                        json = BackupSensitiveEnvelope.decrypt(BackupAES(), json)
+                    }
+                    GSON.fromJsonArray<Server>(json).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                }
+                "sourceSub" -> GSON.fromJsonArray<RuleSub>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "txtTocRule" -> GSON.fromJsonArray<TxtTocRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "httpTTS" -> GSON.fromJsonArray<HttpTTS>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "keyboardAssists" -> GSON.fromJsonArray<KeyboardAssist>(file.readText()).getOrNull().orEmpty().map { "${it.type}|${it.key}" }.toSet()
+                "dictRule" -> GSON.fromJsonArray<DictRule>(file.readText()).getOrNull().orEmpty().map { it.name }.toSet()
+                "homepageModules" -> GSON.fromJsonArray<HomepageModule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "homepageCustomSets" -> GSON.fromJsonArray<HomepageCustomSet>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "highlightRule" -> GSON.fromJsonArray<HighlightRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "highlightTagRule" -> GSON.fromJsonArray<HighlightTagRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "tagGroupRule" -> GSON.fromJsonArray<TagGroupRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "readSettings" -> setOf("readSettings")
+                else -> emptySet<String>()
+            }
+        } catch (e: Exception) {
+            emptySet<String>()
         }
+    }
+
+    private fun getApplicationItemIds(category: String): Set<String> {
+        return when (category) {
+            "bookshelf" -> appDb.bookDao.all.map { it.bookUrl }.toSet()
+            "bookmark" -> appDb.bookmarkDao.all.map { it.time.toString() }.toSet()
+            "bookGroup" -> appDb.bookGroupDao.all.map { it.groupId.toString() }.toSet()
+            "bookSource" -> appDb.bookSourceDao.all.map { it.bookSourceUrl }.toSet()
+            "rssSource" -> appDb.rssSourceDao.all.map { it.sourceUrl }.toSet()
+            "rssStar" -> appDb.rssStarDao.all.map { "${it.origin}|${it.link}" }.toSet()
+            "replaceRule" -> appDb.replaceRuleDao.all.map { it.id.toString() }.toSet()
+            "searchHistory" -> appDb.searchKeywordDao.all.map { it.word }.toSet()
+            "readRecord" -> appDb.readRecordDao.all.map { "${it.bookName}|${it.bookAuthor}" }.toSet()
+            "server" -> appDb.serverDao.all.map { it.id.toString() }.toSet()
+            "sourceSub" -> appDb.ruleSubDao.all.map { it.id.toString() }.toSet()
+            "txtTocRule" -> appDb.txtTocRuleDao.all.map { it.id.toString() }.toSet()
+            "httpTTS" -> appDb.httpTTSDao.all.map { it.id.toString() }.toSet()
+            "keyboardAssists" -> appDb.keyboardAssistsDao.all.map { "${it.type}|${it.key}" }.toSet()
+            "dictRule" -> appDb.dictRuleDao.all.map { it.name }.toSet()
+            "homepageModules" -> appDb.homepageModuleDao.getAll().map { it.id.toString() }.toSet()
+            "homepageCustomSets" -> appDb.homepageCustomSetDao.getAll().map { it.id.toString() }.toSet()
+            "highlightRule" -> appDb.highlightRuleDao.getAll().map { it.id.toString() }.toSet()
+            "highlightTagRule" -> appDb.highlightTagRuleDao.getAll().map { it.id.toString() }.toSet()
+            "tagGroupRule" -> appDb.tagGroupRuleDao.getAll().map { it.id.toString() }.toSet()
+            "readSettings" -> setOf("readSettings")
+            else -> emptySet<String>()
+        }
+    }
 
     /** 恢复 ZIP 内按 hash 命名的背景资源；单张图片失败不影响其他类别。 */
     private fun restoreBackgroundResources(path: String): Int {
@@ -1051,6 +1369,10 @@ object Restore : KoinComponent {
                     File(path, ReadBookConfig.configFileName),
                     File(path, ReadBookConfig.shareConfigFileName),
                     File(path, ThemeConfigStore.configFileName),
+                    File(path, "readSettings.json"),
+                    File(path, "highlightRule.json"),
+                    File(path, "highlightTagRule.json"),
+                    File(path, "tagGroupRule.json"),
                 ).filter(File::isFile).forEach { file ->
                     var text = file.readText()
                     restoredNames.forEach { name ->
@@ -1082,6 +1404,10 @@ object Restore : KoinComponent {
                 File(path, ReadBookConfig.configFileName),
                 File(path, ReadBookConfig.shareConfigFileName),
                 File(path, ThemeConfigStore.configFileName),
+                File(path, "readSettings.json"),
+                File(path, "highlightRule.json"),
+                File(path, "highlightTagRule.json"),
+                File(path, "tagGroupRule.json"),
             )
             files.filter(File::isFile).forEach { file ->
                 var text = file.readText()
@@ -1210,12 +1536,12 @@ object Restore : KoinComponent {
         aes: BackupAES,
         mode: RestoreMode,
         allowLegacyPlaintextFallback: Boolean,
-    ) {
+    ): Set<String> {
         val normalization = normalizeConfigMapWithReport(
             map = map,
             keyIsNotIgnore = { BackupConfig.keyIsNotIgnore(it) },
             decryptWebDavPassword = {
-                runCatching { aes.decryptStr(it) }.getOrNull().also { decrypted ->
+                runCatching { BackupSensitiveEnvelope.decrypt(aes, it) }.getOrNull().also { decrypted ->
                     if (decrypted == null) {
                         AppLog.put("恢复 WebDAV 密码解密失败，已跳过敏感配置")
                     }
@@ -1242,7 +1568,16 @@ object Restore : KoinComponent {
         // 使用带确认的批量写入，确保 Gateway/底栏读取到恢复后的完整快照。
         AppConfigStore.putAllAndAwait(valuesToApply)
         SettingsWriter.awaitPendingWrites()
+        return normalization.decryptionFailedKeys
     }
+
+    /** 高亮规则跨设备恢复时不依赖随机 UUID，避免同一规则重复导入。 */
+    private fun highlightRuleIdentity(rule: HighlightRule): String = listOf(
+        rule.name,
+        rule.pattern,
+        rule.targetScope,
+        rule.configName.orEmpty(),
+    ).joinToString("\u0000")
 
     private fun readXmlToMap(file: File): Map<String, Any?> {
         val result = BackupConfigCodec.decodeWithReport(file.readText())
@@ -1252,24 +1587,35 @@ object Restore : KoinComponent {
         return result.values
     }
 
-    private inline fun <reified T> fileToListT(path: String, fileName: String): List<T>? {
-        try {
-            val file = File(path, fileName)
-            if (file.exists()) {
-                LogUtils.d(TAG, "阅读恢复备份 $fileName 文件大小 ${file.length()}")
-                FileInputStream(file).use {
-                    return GSON.fromJsonArray<T>(it).getOrThrow().also { list ->
-                        LogUtils.d(TAG, "阅读恢复备份 $fileName 列表大小 ${list.size}")
-                    }
-                }
-            } else {
-                LogUtils.d(TAG, "阅读恢复备份 $fileName 文件不存在")
-            }
-        } catch (e: Exception) {
-            AppLog.put("$fileName\n读取解析出错\n${e.localizedMessage}", e)
-            appCtx.toastOnUi("$fileName\n读取文件出错\n${e.localizedMessage}")
-        }
-        return null
+    /** 严格读取恢复类别；解析失败必须交给调用方形成类别级失败报告。 */
+    private inline fun <reified T> readListStrict(
+        path: String,
+        fileName: String,
+        onFailure: (Throwable) -> Unit,
+    ): List<T>? = runCatching {
+        val file = File(path, fileName)
+        if (!file.isFile) return@runCatching null
+        LogUtils.d(TAG, "严格读取恢复备份 $fileName 文件大小 ${file.length()}")
+        FileInputStream(file).use { input -> GSON.fromJsonArray<T>(input).getOrThrow() }
+    }.onFailure(onFailure).getOrNull()
+
+    /** 严格读取敏感类别：密码、信封或 JSON 损坏都必须成为可见的类别失败。 */
+    private inline fun <reified T> readSensitiveListStrict(file: File, aes: BackupAES): List<T> {
+        val content = file.readText()
+        val json = if (content.isJsonArray()) content else BackupSensitiveEnvelope.decrypt(aes, content)
+        return GSON.fromJsonArray<T>(json).getOrThrow()
     }
 
+}
+
+internal fun classifyRestoreOutcome(
+    failedCategories: Set<String>,
+    attemptedCategories: Set<String>,
+    configFileMissing: Boolean,
+    configFileParseFailed: Boolean,
+): BackupRestoreOutcome = when {
+    failedCategories.isEmpty() && !configFileMissing && !configFileParseFailed -> BackupRestoreOutcome.SUCCESS
+    failedCategories.isEmpty() -> BackupRestoreOutcome.SUCCESS_WITH_WARNINGS
+    attemptedCategories.isNotEmpty() && failedCategories.containsAll(attemptedCategories) -> BackupRestoreOutcome.FAILED
+    else -> BackupRestoreOutcome.PARTIAL
 }

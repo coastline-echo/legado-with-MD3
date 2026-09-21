@@ -21,7 +21,7 @@ internal fun normalizeConfigMap(
     keyIsNotIgnore: (String) -> Boolean,
     decryptWebDavPassword: (String) -> String?,
     hasLocalWebDavPassword: Boolean,
-    allowLegacyPlaintextFallback: Boolean = true,
+    allowLegacyPlaintextFallback: Boolean = false,
 ): Map<String, Any> {
     return normalizeConfigMapWithReport(
         map, keyIsNotIgnore, decryptWebDavPassword, hasLocalWebDavPassword, allowLegacyPlaintextFallback,
@@ -33,7 +33,7 @@ internal fun normalizeConfigMapWithReport(
     keyIsNotIgnore: (String) -> Boolean,
     decryptWebDavPassword: (String) -> String?,
     hasLocalWebDavPassword: Boolean,
-    allowLegacyPlaintextFallback: Boolean = true,
+    allowLegacyPlaintextFallback: Boolean = false,
 ): RestoreConfigNormalization {
     val finalMap = mutableMapOf<String, Any>()
     val ignoredKeys = linkedSetOf<String>()

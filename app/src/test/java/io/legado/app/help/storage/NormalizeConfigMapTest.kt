@@ -58,11 +58,13 @@ class NormalizeConfigMapTest {
     }
 
     @Test
-    fun `webDavPassword 解密失败且本地无密码时保留原文`() {
-        val result = normalize(
+    fun `旧版兼容分支在本地无密码时保留原文`() {
+        val result = normalizeConfigMap(
             mapOf(PreferKey.webDavPassword to "rawPassword"),
+            keyIsNotIgnore = { true },
             decryptWebDavPassword = { null },
             hasLocalWebDavPassword = false,
+            allowLegacyPlaintextFallback = true,
         )
         assertEquals("rawPassword", result[PreferKey.webDavPassword])
     }

@@ -58,11 +58,11 @@ class RestoreCategoryPolicyTest {
         )
         assertEquals(setOf("backup"), plans.single { it.category == "bookshelf" }.importItemIds)
         assertEquals(setOf("source"), plans.single { it.category == "bookSource" }.importItemIds)
-        assertEquals(setOf("application"), plans.single { it.category == "bookshelf" }.deleteItemIds)
+        assertEquals(emptySet<String>(), plans.single { it.category == "bookshelf" }.deleteItemIds)
     }
 
     @Test
-    fun `overwrite plan deletes application-only identities`() {
+    fun `merge plan keeps application-only identities`() {
         val plan = RestoreCategoryPlanner.plan(
             RestoreCategoryInput(
                 category = "bookSource",
@@ -72,7 +72,28 @@ class RestoreCategoryPolicyTest {
             ),
             RestoreMode.USE_BACKUP,
         )
-        assertEquals(setOf("application-only"), plan.deleteItemIds)
+        assertEquals(emptySet<String>(), plan.deleteItemIds)
         assertEquals(setOf("backup"), plan.importItemIds)
+    }
+
+    @Test
+    fun `clear then restore is explicit and empty backup still does not clear`() {
+        val dataPlan = RestoreCategoryPlanner.plan(
+            RestoreCategoryInput(
+                category = "bookSource",
+                backupPresent = true,
+                backupItemIds = setOf("backup"),
+                applicationItemIds = setOf("application-only"),
+            ),
+            RestoreMode.CLEAR_THEN_RESTORE,
+        )
+        assertEquals(true, dataPlan.clearApplication)
+        assertEquals(setOf("backup"), dataPlan.importItemIds)
+
+        val emptyPlan = RestoreCategoryPlanner.plan(
+            RestoreCategoryInput("bookSource", backupPresent = true),
+            RestoreMode.CLEAR_THEN_RESTORE,
+        )
+        assertEquals(false, emptyPlan.clearApplication)
     }
 }

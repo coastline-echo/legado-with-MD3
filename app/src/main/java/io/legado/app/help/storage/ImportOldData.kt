@@ -41,9 +41,9 @@ object ImportOldData {
         var failedFiles = 0
         var skippedFiles = 0
         if (uri.isContentScheme()) {
-            val documents = DocumentFile.fromTreeUri(context, uri)?.listFiles()?.toList()
-                ?: DocumentFile.fromSingleUri(context, uri)?.let(::listOf)
-                ?: emptyList()
+            val single = DocumentFile.fromSingleUri(context, uri)
+            val documents = if (single?.isFile == true) listOf(single)
+            else DocumentFile.fromTreeUri(context, uri)?.listFiles()?.toList().orEmpty()
             if (documents.isEmpty()) {
                 context.toastOnUi(context.getString(R.string.import_old_no_files))
                 return ImportResult(skippedFiles = 1)
@@ -104,7 +104,73 @@ object ImportOldData {
                     }
                 }
             }
-        } else {
+} else {
+            // 尝试用 DocumentFile 处理所有 URI（包括 file:// 和部分 content://）
+            val doc = DocumentFile.fromSingleUri(context, uri)
+            val documents = if (doc?.isFile == true) listOf(doc)
+            else DocumentFile.fromTreeUri(context, uri)?.listFiles()?.toList().orEmpty()
+
+            if (documents.isNotEmpty()) {
+                // 如果 DocumentFile 能处理，按内容处理
+                if (documents.size == 1 && documents[0].name?.lowercase()?.endsWith(".zip") == true) {
+                    val temp = File(context.cacheDir, "legacy_import_${System.nanoTime()}").apply { mkdirs() }
+                    return try {
+                        context.contentResolver.openInputStream(documents[0].uri)?.use {
+                            ZipUtils.unZipToPath(it, temp.absolutePath)
+                        } ?: return ImportResult(failedFiles = 1)
+                        importDirectory(temp)
+                    } finally {
+                        temp.deleteRecursively()
+                    }
+                }
+                documents.forEach { doc ->
+                    when (doc.name) {
+                        "myBookShelf.json" ->
+                            kotlin.runCatching {
+                                doc.uri.readText(context).let { json ->
+                                    val importCount = importOldBookshelf(json)
+                                    processedFiles++
+                                    importedItems += importCount
+                                    context.toastOnUi("成功导入书架${importCount}")
+                                }
+                            }.onFailure {
+                                failedFiles++
+                                context.toastOnUi("导入书架失败\n${it.localizedMessage}")
+                            }
+                        "myBookSource.json" ->
+                            kotlin.runCatching {
+                                doc.uri.readText(context).let { json ->
+                                    val importCount = importOldSource(json)
+                                    processedFiles++
+                                    importedItems += importCount
+                                    context.toastOnUi("成功导入书源${importCount}")
+                                }
+                            }.onFailure {
+                                failedFiles++
+                                context.toastOnUi("导入书源失败\n${it.localizedMessage}")
+                            }
+                        "myBookReplaceRule.json" ->
+                            kotlin.runCatching {
+                                doc.uri.readText(context).let { json ->
+                                    val importCount = importOldReplaceRule(json)
+                                    processedFiles++
+                                    importedItems += importCount
+                                    context.toastOnUi("成功导入替换规则${importCount}")
+                                }
+                            }.onFailure {
+                                failedFiles++
+                                context.toastOnUi("导入替换规则失败\n${it.localizedMessage}")
+                            }
+                        else -> {
+                            skippedFiles++
+                            context.toastOnUi(context.getString(R.string.import_old_unsupported))
+                        }
+                    }
+                }
+                return ImportResult(processedFiles, importedItems, failedFiles, skippedFiles)
+            }
+
+            // 回退：尝试用路径（旧版行为，仅对 file:// 有效）
             uri.path?.let { path ->
                 val file = File(path)
                 if (file.isFile) {
@@ -143,6 +209,7 @@ object ImportOldData {
                     }
                     return@let
                 }
+                // 目录处理
                 kotlin.runCatching {// 导入书架
                     val shelfFile = if (file.isDirectory) file.getFile("myBookShelf.json") else file
                     if (!shelfFile.isFile) throw NoStackTraceException("未找到旧版书架文件")
