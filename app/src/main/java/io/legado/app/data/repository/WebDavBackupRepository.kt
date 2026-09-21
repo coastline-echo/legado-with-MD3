@@ -15,8 +15,8 @@ class WebDavBackupRepository : WebDavBackupGateway {
     override val isJianGuoYun: Boolean
         get() = AppWebDav.isJianGuoYun
 
-    override suspend fun syncConfig() {
-        withContext(IO) {
+    override suspend fun syncConfig(): kotlin.Result<Unit> {
+        return withContext(IO) {
             AppWebDav.upConfig()
         }
     }
@@ -27,8 +27,8 @@ class WebDavBackupRepository : WebDavBackupGateway {
         }
     }
 
-    override suspend fun backup() {
-        withContext(IO) {
+    override suspend fun backup(): String {
+        return withContext(IO) {
             Backup.backupLocked(appCtx, path = null, mode = "webdav")
         }
     }
@@ -50,14 +50,14 @@ class WebDavBackupRepository : WebDavBackupGateway {
         }
     }
 
-    override suspend fun restore(name: String) {
-        withContext(IO) {
+    override suspend fun restore(name: String): String {
+        return withContext(IO) {
             AppWebDav.restoreWebDav(name)
         }
     }
 
-    override suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode>, backupPassword: String?) {
-        withContext(IO) {
+    override suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
+        return withContext(IO) {
             AppWebDav.restoreWebDav(name, mode, categoryModes, backupPassword)
         }
     }

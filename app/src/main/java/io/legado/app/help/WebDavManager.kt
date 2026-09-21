@@ -186,7 +186,10 @@ class WebDavManager(
 
     @Throws(Exception::class)
     suspend fun backUpWebDav(fileName: String) {
-        if (!NetworkUtils.isAvailable()) return
+        // 备份上传失败必须向上层传播，不能把网络不可用伪装成上传成功。
+        if (!NetworkUtils.isAvailable()) {
+            throw NoStackTraceException("网络不可用")
+        }
         val auth = requireAuthorization()
         val rootUrl = buildRootUrl(configFlow.value)
         val putUrl = "$rootUrl$fileName"

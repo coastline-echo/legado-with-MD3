@@ -11,9 +11,12 @@ import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
+import io.legado.app.help.storage.BackupRestoreResultBus
 import io.legado.app.help.storage.Restore
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.RestorePreview
+import io.legado.app.domain.model.BackupRestoreOutcome
+import io.legado.app.domain.model.BackupRestoreResult
 import io.legado.app.lib.webdav.Authorization
 import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
@@ -75,30 +78,31 @@ object AppWebDav {
             return url
         }
 
-    suspend fun upConfig() {
-        configMutex.withLock {
+    suspend fun upConfig(): Result<Unit> {
+        return configMutex.withLock {
             val config = AppliedWebDavConfig(
                 url = backupGateway.currentSettings.webDavUrl,
                 account = backupGateway.currentSettings.webDavAccount,
                 password = backupGateway.currentSettings.webDavPassword,
                 dir = backupGateway.currentSettings.webDavDir,
             )
-            if (appliedConfig == config) return
+            if (appliedConfig == config) return@withLock Result.success(Unit)
 
             kotlin.runCatching {
                 authorization = null
                 defaultBookWebDav = null
-                if (config.account.isNotEmpty() && config.password.isNotEmpty()) {
-                    val mAuthorization = Authorization(config.account, config.password)
-                    checkAuthorization(mAuthorization)
-                    WebDav(rootWebDavUrl, mAuthorization).makeAsDir()
-                    WebDav(bookProgressUrl, mAuthorization).makeAsDir()
-                    WebDav(exportsWebDavUrl, mAuthorization).makeAsDir()
-                    WebDav(bgWebDavUrl, mAuthorization).makeAsDir()
-                    val rootBooksUrl = "${rootWebDavUrl}books/"
-                    defaultBookWebDav = RemoteBookWebDav(rootBooksUrl, mAuthorization)
-                    authorization = mAuthorization
+                if (config.account.isNullOrEmpty() || config.password.isNullOrEmpty()) {
+                    throw NoStackTraceException("WebDAV 账号或密码为空")
                 }
+                val mAuthorization = Authorization(config.account, config.password)
+                checkAuthorization(mAuthorization)
+                check(WebDav(rootWebDavUrl, mAuthorization).makeAsDir()) { "WebDAV 根目录创建失败" }
+                check(WebDav(bookProgressUrl, mAuthorization).makeAsDir()) { "WebDAV 阅读进度目录创建失败" }
+                check(WebDav(exportsWebDavUrl, mAuthorization).makeAsDir()) { "WebDAV 导出目录创建失败" }
+                check(WebDav(bgWebDavUrl, mAuthorization).makeAsDir()) { "WebDAV 背景目录创建失败" }
+                val rootBooksUrl = "${rootWebDavUrl}books/"
+                defaultBookWebDav = RemoteBookWebDav(rootBooksUrl, mAuthorization)
+                authorization = mAuthorization
                 appliedConfig = config
             }
         }
@@ -138,12 +142,16 @@ object AppWebDav {
         return names
     }
 
-    @Throws(WebDavException::class)
-    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null) {
-        authorization?.let {
-            val webDav = WebDav(rootWebDavUrl + name, it)
-            BackupRestoreLock.withLock {
+@Throws(WebDavException::class, NoStackTraceException::class)
+    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String {
+        val auth = authorization ?: throw NoStackTraceException("WebDAV 未配置或认证失败")
+        val webDav = WebDav(rootWebDavUrl + name, auth)
+        val operationId = java.util.UUID.randomUUID().toString()
+        return BackupRestoreLock.withLock {
+            var downloaded = false
+            try {
                 webDav.downloadTo(Backup.zipFilePath, true)
+                downloaded = true
                 FileUtils.delete(Backup.backupPath)
                 ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
                 // 旧版 WebDAV 将背景图放在独立目录；新格式优先使用 ZIP 内资源。
@@ -155,8 +163,26 @@ object AppWebDav {
                     mode = mode,
                     categoryModes = categoryModes,
                     backupPassword = backupPassword,
+                    operationId = operationId,
                 )
-                LocalConfig.lastBackup = System.currentTimeMillis()
+                BackupRestoreResultBus.getResult(operationId)
+                    ?.takeUnless {
+                        it.outcome == BackupRestoreOutcome.FAILED ||
+                            it.outcome == BackupRestoreOutcome.PRECONDITION_FAILED
+                    }
+                    ?.let { LocalConfig.lastBackup = System.currentTimeMillis() }
+                operationId
+            } catch (error: Exception) {
+                BackupRestoreResultBus.emit(
+                    BackupRestoreResult(
+                        operationId = operationId,
+                        outcome = BackupRestoreOutcome.FAILED,
+                        failures = 1,
+                        webDavDownloadFailed = !downloaded,
+                        unzipFailed = downloaded,
+                    )
+                )
+                throw error
             }
         }
     }
@@ -218,11 +244,13 @@ object AppWebDav {
      */
     @Throws(Exception::class)
     suspend fun backUpWebDav(fileName: String) {
-        if (!NetworkUtils.isAvailable()) return
+        if (!NetworkUtils.isAvailable()) {
+            throw NoStackTraceException("网络不可用")
+        }
         authorization?.let {
             val putUrl = "$rootWebDavUrl$fileName"
             WebDav(putUrl, it).upload(Backup.zipFilePath)
-        }
+        } ?: throw NoStackTraceException("WebDAV 未配置或认证失败")
     }
 
     /**
@@ -254,18 +282,7 @@ object AppWebDav {
                     .upload(it)
             }
         }
-    }
-
-    /**
-     * 下载背景图片
-     */
-    suspend fun downBgs() {
-        val authorization = authorization ?: return
-        if (!NetworkUtils.isAvailable()) return
-        val bgWebDavFiles = getAllBgWebDavFiles().getOrThrow()
-            .map { it.displayName }
-            .toSet()
-    }
+}
 
     suspend fun previewWebDav(name: String): RestorePreview {
         val auth = authorization ?: throw NoStackTraceException("webDav没有配置")
@@ -295,31 +312,33 @@ object AppWebDav {
     }
 
     @Suppress("unused")
-    suspend fun exportWebDav(byteArray: ByteArray, fileName: String) {
-        if (!NetworkUtils.isAvailable()) return
-        try {
-            authorization?.let {
-                // 如果导出的本地文件存在,开始上传
-                val putUrl = exportsWebDavUrl + fileName
-                WebDav(putUrl, it).upload(byteArray, "text/plain")
-            }
+    suspend fun exportWebDav(byteArray: ByteArray, fileName: String): Result<Unit> {
+        if (!NetworkUtils.isAvailable()) return Result.failure(NoStackTraceException("网络不可用"))
+        return try {
+            val auth = authorization ?: return Result.failure(NoStackTraceException("WebDAV 未配置或认证失败"))
+            // 如果导出的本地文件存在,开始上传
+            val putUrl = exportsWebDavUrl + fileName
+            WebDav(putUrl, auth).upload(byteArray, "text/plain")
+            Result.success(Unit)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             AppLog.put("WebDav导出失败\n${e.localizedMessage}", e, true)
+            Result.failure(e)
         }
     }
 
-    suspend fun exportWebDav(uri: Uri, fileName: String) {
-        if (!NetworkUtils.isAvailable()) return
-        try {
-            authorization?.let {
-                // 如果导出的本地文件存在,开始上传
-                val putUrl = exportsWebDavUrl + fileName
-                WebDav(putUrl, it).upload(uri, "text/plain")
-            }
+    suspend fun exportWebDav(uri: Uri, fileName: String): Result<Unit> {
+        if (!NetworkUtils.isAvailable()) return Result.failure(NoStackTraceException("网络不可用"))
+        return try {
+            val auth = authorization ?: return Result.failure(NoStackTraceException("WebDAV 未配置或认证失败"))
+            // 如果导出的本地文件存在,开始上传
+            val putUrl = exportsWebDavUrl + fileName
+            WebDav(putUrl, auth).upload(uri, "text/plain")
+            Result.success(Unit)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             AppLog.put("WebDav导出失败\n${e.localizedMessage}", e, true)
+            Result.failure(e)
         }
     }
 

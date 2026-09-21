@@ -12,20 +12,20 @@ import splitties.init.appCtx
 
 class BackupRestoreRepository : BackupRestoreGateway {
 
-    override suspend fun backup(path: String?, mode: String) {
-        withContext(IO) {
+    override suspend fun backup(path: String?, mode: String): String {
+        return withContext(IO) {
             Backup.backupLocked(appCtx, path, mode)
         }
     }
 
-    override suspend fun restoreLocal(uri: String) {
-        withContext(IO) {
+    override suspend fun restoreLocal(uri: String): String {
+        return withContext(IO) {
             Restore.restore(appCtx, uri.toUri())
         }
     }
 
-    override suspend fun restoreLocal(uri: String, mode: RestoreMode, selectedCategories: Set<String>, categoryModes: Map<String, RestoreMode>, backupPassword: String?) {
-        withContext(IO) {
+    override suspend fun restoreLocal(uri: String, mode: RestoreMode, selectedCategories: Set<String>, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
+        return withContext(IO) {
             Restore.restore(appCtx, uri.toUri(), mode, selectedCategories, categoryModes, backupPassword)
         }
     }

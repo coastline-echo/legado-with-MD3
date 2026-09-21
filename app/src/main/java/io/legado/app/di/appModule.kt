@@ -401,7 +401,7 @@ val appModule = module {
     singleOf(::HighlightTagRuleRepository)
     singleOf(::ReadStyleRepository)
     singleOf(::ReadStyleConfigStore)
-    singleOf(::ReadBookStyleConfigRepository)
+    single { ReadBookStyleConfigRepository(get(), get(), get(), get()) }
     single<ReadStyleGateway> { get<ReadBookStyleConfigRepository>() }
     factoryOf(::MangaReaderDataRepository)
     factoryOf(::MangaReaderActionRepository)

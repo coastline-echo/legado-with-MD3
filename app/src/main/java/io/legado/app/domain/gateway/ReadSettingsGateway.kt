@@ -15,4 +15,10 @@ interface ReadSettingsGateway {
      * 只有被 transform 改动的键会产生写入。
      */
     suspend fun update(transform: (ReadSettings) -> ReadSettings)
+
+    /** 导出完整 ReadSettings 供备份。 */
+    fun exportJson(): String
+
+    /** 从 JSON 恢复 ReadSettings（仅用于备份恢复）。 */
+    suspend fun importJson(json: String)
 }

@@ -320,10 +320,10 @@ open class WebDav(
                 addHeader("Depth", "0")
                 val requestBody = EXISTS.toRequestBody("application/xml".toMediaType())
                 method("PROPFIND", requestBody)
-            }.use { it.code != 401 }
+            }.use { it.isSuccessful }
         }.onFailure {
             currentCoroutineContext().ensureActive()
-        }.getOrDefault(true)
+        }.getOrDefault(false)
     }
 
     /**

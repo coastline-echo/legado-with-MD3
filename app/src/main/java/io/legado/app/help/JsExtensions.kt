@@ -733,7 +733,7 @@ interface JsExtensions : JsEncodeUtils {
         }
         val file = File(aPath)
         val safePath = appCtx.externalCache.parent!!
-        if (!file.canonicalPath.startsWith(safePath)) {
+        if (!file.canonicalFile.toPath().startsWith(File(safePath).canonicalFile.toPath())) {
             throw SecurityException("非法路径")
         }
         return file

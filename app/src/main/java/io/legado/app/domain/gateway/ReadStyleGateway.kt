@@ -8,6 +8,9 @@ interface ReadStyleGateway {
     val currentState: ReadStyleState
     val state: StateFlow<ReadStyleState>
 
+    /** 关联的 ReadSettingsGateway，用于导出/导入完整阅读设置。 */
+    val readSettingsGateway: ReadSettingsGateway?
+
     fun refresh()
     fun save()
 

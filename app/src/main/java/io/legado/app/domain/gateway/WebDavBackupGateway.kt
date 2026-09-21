@@ -8,12 +8,12 @@ import io.legado.app.domain.model.WebDavBackup
 interface WebDavBackupGateway {
     val isJianGuoYun: Boolean
 
-    suspend fun syncConfig()
+    suspend fun syncConfig(): Result<Unit>
     suspend fun test(): Boolean
-    suspend fun backup()
+    suspend fun backup(): String
     suspend fun getBackupNames(): List<String>
     suspend fun getLatestBackup(): WebDavBackup?
-    suspend fun restore(name: String)
-    suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null) = restore(name)
+    suspend fun restore(name: String): String
+    suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String
     suspend fun preview(name: String): RestorePreview
 }
