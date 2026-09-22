@@ -53,6 +53,9 @@ class DirectLinkSettingsRepository : DirectLinkSettingsGateway {
 
 class LocalPasswordRepository : LocalPasswordGateway {
 
+    override suspend fun hasPassword(): Boolean =
+        AppConfigStore.getString(LocalPreferencesKeys.PASSWORD.name).orEmpty().isNotEmpty()
+
     override suspend fun setPassword(password: String?) {
         AppConfigStore.putAllAndAwait(
             mapOf(LocalPreferencesKeys.PASSWORD.name to password.orEmpty())

@@ -64,9 +64,14 @@ fun AppModalBottomSheet(
     val sheetDragHandleColor = LegadoTheme.colorScheme.onSurfaceVariant
 
     if (ThemeResolver.isMiuixEngine(LegadoTheme.composeEngine)) {
+        val maxHeight = with(LocalDensity.current) {
+            LocalWindowInfo.current.containerSize.height.toDp() * 0.82f
+        }
         WindowBottomSheet(
             show = show,
-            modifier = modifier,
+            // Miuix 窗口不会像 Material ModalBottomSheet 一样自动限制内容高度。
+            // 先限制窗口最大高度，再由具体内容决定是否滚动，避免底部选项或按钮被裁剪。
+            modifier = modifier.then(Modifier.heightIn(max = maxHeight)),
             title = title,
             startAction = startAction?.let { action ->
                 {

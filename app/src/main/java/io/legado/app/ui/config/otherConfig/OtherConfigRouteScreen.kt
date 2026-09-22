@@ -129,7 +129,7 @@ fun OtherConfigRouteScreen(
             AppTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = "Password",
+                label = stringResource(R.string.local_password_input_placeholder),
                 backgroundColor = LegadoTheme.colorScheme.surface,
                 modifier = Modifier.fillMaxWidth(),
             )

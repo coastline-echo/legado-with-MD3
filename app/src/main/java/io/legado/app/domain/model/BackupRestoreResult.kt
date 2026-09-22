@@ -26,6 +26,8 @@ data class BackupRestoreResult(
     val failedCategories: Set<String> = emptySet(),
     /** 每个类别的失败项数；集合字段保留用于兼容旧调用方。 */
     val failedCategoryCounts: Map<String, Int> = emptyMap(),
+    /** 每个失败类别对应的可展示原因，不包含凭据内容。 */
+    val failedCategoryDetails: Map<String, List<String>> = emptyMap(),
     val categoryStats: Map<String, RestoreCategoryStats> = emptyMap(),
     val writtenConfigKeys: Int = 0,
     val ignoredConfigKeys: Int = 0,

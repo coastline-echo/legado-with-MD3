@@ -22,7 +22,6 @@ data class BackupConfigUiState(
     val dbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val backupDbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val sensitiveItems: ImmutableList<BackupSensitiveItem> = persistentListOf(),
-    val backupPassword: String = "",
     val lastResult: BackupRestoreResult? = null,
 )
 
@@ -32,6 +31,11 @@ data class BackupIgnoreItem(
     val title: String,
     val checked: Boolean,
 )
+
+enum class BackupConfigReportType {
+    BACKUP,
+    RESTORE,
+}
 
 @Stable
 data class BackupSensitiveItem(
@@ -65,7 +69,7 @@ sealed interface BackupConfigDialog {
         val preview: io.legado.app.domain.model.RestorePreview,
         val mode: RestoreMode,
         val networkName: String? = null,
-        val backupPassword: String = "",
+        val localPassword: String = "",
         val selectedCategories: Set<String> = emptySet(),
         val categoryModes: Map<String, RestoreMode> = emptyMap(),
     ) : BackupConfigDialog
@@ -82,6 +86,7 @@ sealed interface BackupConfigDialog {
         val result: BackupRestoreResult,
         val expanded: Boolean = false,
         val message: String? = null,
+        val type: BackupConfigReportType = BackupConfigReportType.BACKUP,
     ) : BackupConfigDialog
 }
 
@@ -115,7 +120,6 @@ sealed interface BackupConfigIntent {
     data object OpenSensitiveItems : BackupConfigIntent
     data class ToggleSensitiveItem(val category: BackupSensitiveCategory, val value: Boolean) : BackupConfigIntent
     data object SaveSensitiveItems : BackupConfigIntent
-    data class SetBackupPassword(val value: String) : BackupConfigIntent
     data object DismissDialog : BackupConfigIntent
     data object ToggleConfigReportDetails : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent

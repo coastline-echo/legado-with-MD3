@@ -19,7 +19,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ProvideAppDensity
@@ -43,9 +46,13 @@ fun AppAlertDialog(
     onDismiss: (() -> Unit)? = null,
 ) {
     if (ThemeResolver.isMiuixEngine(composeEngine)) {
+        val maxHeight = with(LocalDensity.current) {
+            LocalWindowInfo.current.containerSize.height.toDp() * 0.82f
+        }
         WindowDialog(
             show = show,
-            modifier = modifier,
+            // Miuix 对话框需要显式限制窗口高度，内容区再独立滚动，避免按钮被挤出屏幕。
+            modifier = modifier.then(Modifier.heightIn(max = maxHeight)),
             title = title,
             summary = text,
             onDismissRequest = onDismissRequest,

@@ -558,10 +558,13 @@ private suspend fun restore(
             } else {
                 mode == RestoreMode.USE_BACKUP || mode == RestoreMode.CLEAR_THEN_RESTORE
             }
-        val aes = BackupAES(backupPassword)
+        // 空输入表示沿用当前设备本地密码；只有非空输入才覆盖默认密码。
+        // 跨设备恢复时，用户输入原设备设置的同一个本地密码即可解密。
+        val aes = BackupAES(backupPassword.takeIf { !it.isNullOrEmpty() })
         var categoryFailures = 0
         val failedCategories = linkedSetOf<String>()
         val failedCategoryCounts = linkedMapOf<String, Int>()
+        val failedCategoryDetails = linkedMapOf<String, MutableList<String>>()
         var configFileMissing = false
         var configFileParseFailed = false
         val decryptionFailedConfigKeys = linkedSetOf<String>()
@@ -569,6 +572,9 @@ private suspend fun restore(
             categoryFailures++
             failedCategories += category
             failedCategoryCounts[category] = (failedCategoryCounts[category] ?: 0) + 1
+            error.localizedMessage?.takeIf { it.isNotBlank() }?.let { detail ->
+                failedCategoryDetails.getOrPut(category) { mutableListOf() }.add(detail)
+            }
             AppLog.put("恢复类别失败：$category\n${error.localizedMessage}", error)
             BackupRestoreProgressBus.emit(
                 BackupRestoreProgress(
@@ -1176,6 +1182,7 @@ BackupRestoreResultBus.emit(
                 failures = categoryFailures,
                 failedCategories = failedCategories,
                 failedCategoryCounts = failedCategoryCounts.toMap(),
+                failedCategoryDetails = failedCategoryDetails.mapValues { (_, details) -> details.toList() },
                 categoryStats = categoryStats,
                 configFileMissing = configFileMissing,
                 configFileParseFailed = configFileParseFailed,

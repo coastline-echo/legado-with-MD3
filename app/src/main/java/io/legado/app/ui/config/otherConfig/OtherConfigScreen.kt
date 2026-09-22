@@ -122,7 +122,10 @@ fun OtherConfigScreen(
 
                 ClickableSettingItem(
                     title = stringResource(R.string.set_local_password),
-                    description = stringResource(R.string.set_local_password_summary),
+                    description = stringResource(
+                        if (state.localPasswordSet) R.string.local_password_set_summary
+                        else R.string.set_local_password_summary,
+                    ),
                     onClick = { onIntent(OtherConfigIntent.ShowOverlay(OtherConfigOverlay.Password)) }
                 )
 

@@ -15,6 +15,7 @@ interface DirectLinkSettingsGateway {
 }
 
 interface LocalPasswordGateway {
+    suspend fun hasPassword(): Boolean
     suspend fun setPassword(password: String?)
 }
 

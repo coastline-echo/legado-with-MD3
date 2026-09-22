@@ -193,7 +193,6 @@
     <string name="restore_confirmation">Restore confirmation</string>
     <string name="restore_message">Restoring the bookshelf data will overwrite the current Bookshelf.</string>
     <string name="backup_success">Backup succeed</string>
-    <string name="backup_success_with_config_report">Backup completed. Config keys: %1$s</string>
     <string name="backup_config_integrity_title">Backup configuration integrity</string>
     <string name="backup_config_integrity_counts">Written %1$d, ignored %2$d, unsupported %3$d, failed %4$d, not set %5$d</string>
     <string name="backup_webdav_upload_failed">Local backup succeeded, but WebDAV upload failed.</string>
@@ -235,7 +234,9 @@
     <string name="restore_category_direct_link">Direct-link upload rules</string>
     <string name="restore_category_read_settings">Reading UI settings</string>
     <string name="restore_preview_more_sensitive">%1$d sensitive items are not expanded</string>
-    <string name="restore_preview_sensitive_hint">This backup contains sensitive information. Enter the backup password to restore it.</string>
+    <string name="restore_preview_sensitive_hint">This backup contains sensitive information. Enter the original device local password to restore it.</string>
+    <string name="restore_local_password_label">Original device local password</string>
+    <string name="restore_preview_sensitive_weak_hint">This backup contains sensitive information protected by a weak or empty password. No password input is required.</string>
     <string name="backup_local_result_success">Local backup: success</string>
     <string name="backup_local_result_failed">Local backup: failed</string>
     <string name="backup_webdav_result_success">WebDAV upload: success</string>
@@ -248,13 +249,19 @@
     <string name="restore_category_conflicts">Conflicts: %1$d</string>
     <string name="backup_restore_category_result">%1$s: added %2$d, updated %3$d, skipped %4$d, deleted %5$d, failed %6$d</string>
     <string name="backup_restore_failed_categories">Restore failures: %1$s</string>
+    <string name="backup_result_targets_title">Backup targets</string>
+    <string name="backup_result_categories_title">Category results</string>
+    <string name="restore_result_failures_title">Failure details</string>
+    <string name="restore_result_title">Restore result</string>
+    <string name="restore_failure_detail">%1$s: %2$s</string>
+    <string name="restore_result_summary">%1$s\nFailures: %2$d</string>
+    <string name="restore_result_decryption_failed">Sensitive settings failed to decrypt: %1$d</string>
     <string name="backup_config_detail_category">Affected settings: %1$s</string>
     <string name="backup_config_detail_network">Network and WebDAV</string>
     <string name="backup_config_detail_theme">Theme and appearance</string>
     <string name="backup_config_detail_reader">Reader</string>
     <string name="backup_config_detail_bookshelf">Bookshelf</string>
     <string name="backup_config_detail_other">Other app settings</string>
-    <string name="restore_preview_category_status">Empty: %1$s\nMissing: %2$s\nBackup ignored: %3$s\nRestore ignored: %4$s</string>
     <string name="restore_preview_empty_categories">Empty: %1$s</string>
     <string name="restore_preview_missing_categories">Missing: %1$s</string>
     <string name="restore_preview_backup_ignored">Ignored in backup: %1$s</string>
@@ -301,16 +308,14 @@
     <string name="restore_config_missing">Restore skipped settings: config.xml is missing (%1$s)</string>
     <string name="restore_config_parse_failed">Restore skipped settings: config.xml is invalid (%1$s)</string>
     <string name="backup_stage_local">Writing local backup</string><string name="restore_stage_config">Restoring configuration</string><string name="restore_stage_refresh">Refreshing runtime</string>
-    <string name="backup_password">Backup password (optional)</string>
-    <string name="backup_password_weak_warning">Empty password is allowed, but sensitive information has weak protection.</string>
     <string name="backup_fail">Backup failed\n%s</string>
     <string name="on_restore">Restoring</string>
-    <string name="restore_success">Restore succeed</string>
-    <string name="restore_fail">Backup failed</string>
+    <string name="restore_success">Restore succeeded</string>
+    <string name="restore_fail">Restore failed</string>
     <string name="restore_fail_with_error">Restore failed: %1$s</string>
     <string name="restore_from_local">Restore from Local</string>
     <string name="restore_from_network">Restore from Network</string>
-    <string name="webdav_restore_fallback_message">WebDAV error\n%1$s\nRestore from a local backup instead.</string>
+    <string name="webdav_restore_fallback_message">%1$s\nRestore from a local backup instead.</string>
     <string name="webdav_restore_fail">WebDAV restore failed\n%1$s</string>
     <string name="screen_direction">Screen Orientation</string>
     <string name="screen_sensor">Auto(sensor)</string>
@@ -908,6 +913,7 @@
     <string name="hide_password">Hide password</string>
     <string name="web_dav_url">WebDAV Server Address</string>
     <string name="web_dav_url_s">Input your WebDAV server address</string>
+    <string name="web_dav_url_placeholder">Default: https://dav.jianguoyun.com/dav/</string>
     <string name="web_dav_account">WebDAV Account</string>
     <string name="web_dav_account_d">Input your WebDAV account</string>
     <string name="rss_source">RSS source</string>
@@ -1623,6 +1629,8 @@
     <string name="select_update_source">Select update source</string>
     <string name="set_local_password">Setting the Local Password</string>
     <string name="set_local_password_summary">The local password is used to encrypt and decrypt the sensitive information of the backup, if you need to synchronize between different devices, the local password should be the same.</string>
+    <string name="local_password_set_summary">Set; the password is not displayed.</string>
+    <string name="local_password_input_placeholder">Enter a new local password</string>
     <string name="only_latest_backup_t">Keep Only the Latest Backup</string>
     <string name="only_latest_backup_s">Local backup keeps only the latest backup file</string>
     <string name="webdav_application_authorization_error">Fail to authorize WebDAV application</string>

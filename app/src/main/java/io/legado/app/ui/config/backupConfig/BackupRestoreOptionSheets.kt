@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
 import io.legado.app.R
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionCard
 import io.legado.app.ui.widget.components.modalBottomSheet.OptionSheet
@@ -68,6 +69,7 @@ fun RestoreOptionSheet(
     OptionSheet(
         show = show,
         onDismissRequest = { source = null; onDismissRequest() },
+        modifier = Modifier.heightIn(min = 220.dp, max = 420.dp),
         title = stringResource(if (source == null) R.string.restore_choose_source else R.string.restore_choose_strategy),
     ) {
         AnimatedContent(

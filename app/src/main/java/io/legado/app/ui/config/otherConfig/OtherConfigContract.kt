@@ -7,6 +7,7 @@ import kotlinx.collections.immutable.persistentListOf
 
 @Stable
 data class OtherConfigUiState(
+    val localPasswordSet: Boolean = false,
     val language: String = "auto",
     val updateToVariant: String = "official_version",
     val autoCheckUpdateOnStart: Boolean = false,

@@ -54,6 +54,9 @@ class OtherConfigViewModel(
 
     init {
         viewModelScope.launch {
+            _uiState.update { it.copy(localPasswordSet = localPasswordGateway.hasPassword()) }
+        }
+        viewModelScope.launch {
             appLocaleGateway.language.collect { language ->
                 _uiState.update { it.copy(language = language) }
             }
@@ -236,7 +239,9 @@ class OtherConfigViewModel(
     private fun saveLocalPassword(password: String) {
         viewModelScope.launch {
             runCatching { localPasswordGateway.setPassword(password) }
-                .onSuccess { _uiState.update { it.copy(activeOverlay = null) } }
+                .onSuccess {
+                    _uiState.update { it.copy(activeOverlay = null, localPasswordSet = password.isNotEmpty()) }
+                }
                 .onFailure { showMessage(it.localizedMessage ?: "设置失败") }
         }
     }

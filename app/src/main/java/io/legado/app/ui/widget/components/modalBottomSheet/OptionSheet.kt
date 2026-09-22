@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,16 +29,20 @@ fun OptionSheet(
     show: Boolean,
     onDismissRequest: () -> Unit,
     title: String,
+    modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit
 ) {
     AppModalBottomSheet(
         show = show,
         title = title,
+        modifier = modifier,
         onDismissRequest = onDismissRequest
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                // 选项数量在小屏或 Miuix 窗口中可能超过可用高度，保持底部操作区可达。
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             FlowRow(

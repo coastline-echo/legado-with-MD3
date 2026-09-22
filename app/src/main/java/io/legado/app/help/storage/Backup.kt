@@ -533,13 +533,7 @@ sensitiveItems = buildSet {
                     add(BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS.name)
                 }
             },
-            weakProtection = BackupPasswordPolicyResolver.resolve(
-                BackupPasswordResolver.resolve(
-                    explicitPassword = null,
-                    storedBackupPassword = LocalConfig.backupPassword,
-                    applicationPassword = LocalConfig.password,
-                ).password,
-            ).weakProtection,
+            weakProtection = BackupPasswordPolicyResolver.resolve(LocalConfig.password).weakProtection,
         )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
             .writeText(GSON.toJson(manifest))

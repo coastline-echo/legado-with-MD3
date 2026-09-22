@@ -44,10 +44,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.help.storage.ImportOldData
-import io.legado.app.help.storage.BackupPasswordPolicyResolver
 import io.legado.app.domain.model.RestoreMode
 import io.legado.app.domain.model.BackupRestoreStage
 import io.legado.app.lib.permission.Permissions
@@ -236,6 +238,7 @@ fun BackupConfigScreen(
                         description = stringResource(R.string.web_dav_url_s),
                         value = settings.webDavUrl,
                         defaultValue = "",
+                        placeholder = stringResource(R.string.web_dav_url_placeholder),
                         onConfirm = { onIntent(BackupConfigIntent.SetWebDavUrl(it)) },
                     )
                     ClickableSettingItem(
@@ -455,8 +458,6 @@ private fun BackupConfigSheets(
     SensitiveItemsSheet(
         show = state.activeSheet == BackupConfigSheet.SensitiveItems,
         items = state.sensitiveItems,
-        backupPassword = state.backupPassword,
-        onPasswordChange = { onIntent(BackupConfigIntent.SetBackupPassword(it)) },
         onToggle = { category, value -> onIntent(BackupConfigIntent.ToggleSensitiveItem(category, value)) },
         onConfirm = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
         onDismiss = { onIntent(BackupConfigIntent.SaveSensitiveItems) },
@@ -467,8 +468,6 @@ private fun BackupConfigSheets(
 private fun SensitiveItemsSheet(
     show: Boolean,
     items: ImmutableList<BackupSensitiveItem>,
-    backupPassword: String,
-    onPasswordChange: (String) -> Unit,
     onToggle: (io.legado.app.domain.model.BackupSensitiveCategory, Boolean) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -476,7 +475,7 @@ private fun SensitiveItemsSheet(
     AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismiss,
-        modifier = Modifier.height(adaptiveBackupDialogHeight(fraction = 0.60f, min = 420.dp, max = 620.dp)),
+        modifier = Modifier.height(adaptiveBackupDialogHeight(fraction = 0.60f)),
         title = stringResource(R.string.backup_sensitive_title),
         endAction = {
             MediumTonalButton(onClick = onConfirm, icon = Icons.Default.Save, contentDescription = stringResource(R.string.save))
@@ -489,23 +488,10 @@ private fun SensitiveItemsSheet(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
         ) {
             item {
-                val passwordPolicy = BackupPasswordPolicyResolver.resolve(
-                    backupPassword,
-                    explicitlyConfigured = io.legado.app.help.storage.BackupConfig.backupPassword != null ||
-                        backupPassword.isNotEmpty(),
+                Text(
+                    text = stringResource(R.string.set_local_password_summary),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
-                AppTextField(
-                    value = backupPassword,
-                    onValueChange = onPasswordChange,
-                    label = stringResource(R.string.backup_password),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                )
-                if (passwordPolicy.weakProtection) {
-                    androidx.compose.material3.Text(
-                        text = stringResource(R.string.backup_password_weak_warning),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
             }
             items(items, key = { it.category.name }) { item ->
                 CheckboxItem(
@@ -561,15 +547,13 @@ private fun sensitiveCategoryDescription(category: io.legado.app.domain.model.Ba
         }
     )
 
-/** 按屏幕高度计算弹窗尺寸，并限制极小屏幕与大屏幕的上下边界。 */
+/** 按屏幕高度比例计算弹窗尺寸，正文区域负责滚动。 */
 @Composable
 private fun adaptiveBackupDialogHeight(
     fraction: Float,
-    min: androidx.compose.ui.unit.Dp,
-    max: androidx.compose.ui.unit.Dp,
 ): androidx.compose.ui.unit.Dp {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    return (screenHeight * fraction).coerceIn(min, max)
+    return screenHeight * fraction
 }
 
 @Composable
@@ -640,8 +624,8 @@ private fun BackupConfigDialogs(
     state: BackupConfigUiState,
     onIntent: (BackupConfigIntent) -> Unit,
 ) {
-    val resultDialogHeight = adaptiveBackupDialogHeight(fraction = 0.40f, min = 200.dp, max = 450.dp)
-    val previewDialogHeight = adaptiveBackupDialogHeight(fraction = 0.65f, min = 300.dp, max = 550.dp)
+    val resultDialogHeight = adaptiveBackupDialogHeight(fraction = 0.40f)
+    val previewDialogHeight = adaptiveBackupDialogHeight(fraction = 0.5f)
     val dialog = state.activeDialog
     val auth = dialog as? BackupConfigDialog.WebDavAuth
     AppAlertDialog(
@@ -742,19 +726,34 @@ private fun BackupConfigDialogs(
 
     val integrity = dialog as? BackupConfigDialog.ConfigIntegrityReport
     AppAlertDialog(
-        modifier = Modifier.height(resultDialogHeight),
+        // 百分比只作为内容区域的最大高度，内容较少时弹窗收缩，按钮不会悬在中间。
+        modifier = Modifier.heightIn(max = resultDialogHeight),
         show = integrity != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
-        title = stringResource(R.string.backup_config_integrity_title),
+        title = stringResource(
+            if (integrity?.type == BackupConfigReportType.RESTORE) {
+                R.string.restore_result_title
+            } else {
+                R.string.backup_config_integrity_title
+            }
+        ),
         text = integrity?.let {
-            stringResource(
-                R.string.backup_config_integrity_counts,
-                it.result.writtenConfigKeys,
-                it.result.ignoredConfigKeys,
-                it.result.unsupportedConfigKeys,
-                it.result.failedConfigKeys,
-                it.result.notSetConfigKeys,
-            )
+            if (it.type == BackupConfigReportType.RESTORE) {
+                stringResource(
+                    R.string.restore_result_summary,
+                    restoreOutcomeTitle(it.result.outcome),
+                    it.result.failures,
+                )
+            } else {
+                stringResource(
+                    R.string.backup_config_integrity_counts,
+                    it.result.writtenConfigKeys,
+                    it.result.ignoredConfigKeys,
+                    it.result.unsupportedConfigKeys,
+                    it.result.failedConfigKeys,
+                    it.result.notSetConfigKeys,
+                )
+            }
         }.orEmpty(),
         content = {
             integrity?.let { report ->
@@ -762,6 +761,13 @@ private fun BackupConfigDialogs(
                     Text(
                         text = message,
                         modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                if (report.result.localBackupAttempted || report.result.webDavUploadAttempted) {
+                    Text(
+                        text = stringResource(R.string.backup_result_targets_title),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                        color = LegadoTheme.colorScheme.primary,
                     )
                 }
                 if (report.result.localBackupAttempted) {
@@ -788,6 +794,13 @@ private fun BackupConfigDialogs(
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
+                if (report.result.categoryStats.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.backup_result_categories_title),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                        color = LegadoTheme.colorScheme.primary,
+                    )
+                }
                 report.result.categoryStats.entries
                     .filter { (_, stats) -> stats.inserted + stats.updated + stats.skipped + stats.deleted + stats.failed > 0 }
                     .forEach { (category, stats) ->
@@ -806,9 +819,26 @@ private fun BackupConfigDialogs(
                     }
                 if (report.result.failedCategories.isNotEmpty()) {
                     Text(
+                        text = stringResource(R.string.restore_result_failures_title),
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                        color = LegadoTheme.colorScheme.error,
+                    )
+                    Text(
                         text = stringResource(
                             R.string.backup_restore_failed_categories,
                             restoreFailureSummary(report.result.failedCategoryCounts),
+                        ),
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        color = LegadoTheme.colorScheme.error,
+                    )
+                }
+                if (report.type == BackupConfigReportType.RESTORE &&
+                    report.result.decryptionFailedConfigKeyNames.isNotEmpty()
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.restore_result_decryption_failed,
+                            report.result.decryptionFailedConfigKeyNames.size,
                         ),
                         modifier = Modifier.padding(vertical = 4.dp),
                         color = LegadoTheme.colorScheme.error,
@@ -818,7 +848,8 @@ private fun BackupConfigDialogs(
                     report.result.notSetConfigKeyNames.size +
                     report.result.unsupportedConfigKeyNames.size +
                     report.result.ignoredConfigKeyNames.size +
-                    report.result.decryptionFailedConfigKeyNames.size
+                    report.result.decryptionFailedConfigKeyNames.size +
+                    report.result.failedCategoryDetails.values.sumOf { it.size }
                 if (detailCount > 0) {
                     Text(
                         text = if (report.expanded) stringResource(R.string.backup_sensitive_collapse)
@@ -829,6 +860,19 @@ private fun BackupConfigDialogs(
                     )
                 }
                 if (report.expanded && detailCount > 0) {
+                    report.result.failedCategoryDetails.forEach { (category, details) ->
+                        details.forEach { detail ->
+                            Text(
+                                text = stringResource(
+                                    R.string.restore_failure_detail,
+                                    restoreCategoryTitle(category),
+                                    detail,
+                                ),
+                                modifier = Modifier.padding(vertical = 2.dp),
+                                color = LegadoTheme.colorScheme.error,
+                            )
+                        }
+                    }
                     configDetailTitles(report.result).forEach { title ->
                         Text(
                             text = stringResource(R.string.backup_config_detail_category, title),
@@ -844,7 +888,8 @@ private fun BackupConfigDialogs(
 
     val preview = dialog as? BackupConfigDialog.RestorePreview
     AppAlertDialog(
-        modifier = Modifier.height(previewDialogHeight),
+        // 内容超出百分比高度时由正文滚动，底部操作按钮保持在弹窗底部。
+        modifier = Modifier.heightIn(max = previewDialogHeight),
         show = preview != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
         title = stringResource(R.string.restore_preview),
@@ -883,15 +928,21 @@ private fun BackupConfigDialogs(
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
-            if (preview?.preview?.sensitiveIncluded == true) {
+            if (preview?.preview?.sensitiveIncluded == true && !preview.preview.weakProtection) {
                 AppTextField(
-                    value = preview.backupPassword,
+                    value = preview.localPassword,
                     onValueChange = { onIntent(BackupConfigIntent.SetRestoreBackupPassword(it)) },
-                    label = stringResource(R.string.backup_password),
+                    label = stringResource(R.string.restore_local_password_label),
                     backgroundColor = LegadoTheme.colorScheme.surface,
                 )
                 Text(
                     text = stringResource(R.string.restore_preview_sensitive_hint),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (preview?.preview?.sensitiveIncluded == true) {
+                Text(
+                    text = stringResource(R.string.restore_preview_sensitive_weak_hint),
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     color = LegadoTheme.colorScheme.onSurfaceVariant,
                 )
@@ -937,7 +988,10 @@ private fun BackupConfigDialogs(
                                 }
                             ),
                             modifier = Modifier
+                                .fillMaxWidth()
                                 .padding(start = 16.dp, bottom = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LegadoTheme.colorScheme.primary.copy(alpha = 0.12f))
                                 .clickable {
                                     onIntent(
                                         BackupConfigIntent.SetRestorePreviewCategoryMode(
@@ -949,7 +1003,9 @@ private fun BackupConfigDialogs(
                                             },
                                         )
                                     )
-                                },
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = LegadoTheme.colorScheme.primary,
                         )
                     }
                 }
@@ -1022,7 +1078,7 @@ private fun restoreCategoryTitle(category: String): String = stringResource(
 private fun restoreCategoryTitles(categories: Collection<String>): String {
     val titles = ArrayList<String>(categories.size)
     for (category in categories) titles += restoreCategoryTitle(category)
-    return titles.joinToString()
+    return titles.joinToString(separator = "、")
 }
 
 /** 将内部配置键归并为用户可理解的设置类别，避免在结果弹窗泄露实现细节。 */
@@ -1056,6 +1112,18 @@ private fun restoreFailureSummary(counts: Map<String, Int>): String {
     for ((category, count) in counts) titles += "${restoreCategoryTitle(category)}($count)"
     return titles.joinToString()
 }
+
+@Composable
+private fun restoreOutcomeTitle(outcome: io.legado.app.domain.model.BackupRestoreOutcome): String =
+    stringResource(
+        when (outcome) {
+            io.legado.app.domain.model.BackupRestoreOutcome.SUCCESS -> R.string.restore_success
+            io.legado.app.domain.model.BackupRestoreOutcome.SUCCESS_WITH_WARNINGS -> R.string.restore_success_with_warnings
+            io.legado.app.domain.model.BackupRestoreOutcome.PARTIAL -> R.string.restore_partial
+            io.legado.app.domain.model.BackupRestoreOutcome.FAILED -> R.string.restore_fail
+            io.legado.app.domain.model.BackupRestoreOutcome.PRECONDITION_FAILED -> R.string.restore_fail_with_error
+        }
+    )
 
 @Composable
 private fun BackupRestoreStage.localizedTitle(): String = stringResource(

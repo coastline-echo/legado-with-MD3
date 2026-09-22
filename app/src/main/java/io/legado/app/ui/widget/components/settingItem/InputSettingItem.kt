@@ -31,6 +31,7 @@ fun InputSettingItem(
     title: String,
     value: String,
     defaultValue: String? = "",
+    placeholder: String? = null,
     description: String? = null,
     onConfirm: (String) -> Unit
 ) {
@@ -53,7 +54,7 @@ fun InputSettingItem(
         Column(modifier = Modifier.fillMaxWidth()) {
             BasicComponent(
                 title = title,
-                summary = value,
+                    summary = value.ifBlank { placeholder.orEmpty() },
                 onClick = { expanded = !expanded }
             )
 
@@ -66,7 +67,7 @@ fun InputSettingItem(
                     MiuixTextField(
                         state = state,
                         modifier = Modifier.fillMaxWidth(),
-                        label = stringResource(R.string.edit),
+                        label = placeholder ?: stringResource(R.string.edit),
                         onKeyboardAction = {
                             onConfirm(state.text.toString())
                             expanded = false
@@ -108,6 +109,7 @@ fun InputSettingItem(
                         start = 12.dp,
                         end = 12.dp
                     ),
+                    placeholder = placeholder?.let { { AppText(it) } },
                     onKeyboardAction = {
                         onConfirm(state.text.toString())
                         expanded = false
