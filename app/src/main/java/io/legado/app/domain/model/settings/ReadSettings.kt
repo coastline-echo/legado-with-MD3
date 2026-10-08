@@ -115,4 +115,6 @@ data class ReadSettings(
     val showMenuIcon: Boolean = false,
     val titleBarCompact: Boolean = false,
     val moreActionsConfig: String = "",
+    val titleBarButtons: String = "",
+    val bottomBarButtons: String = "",
 )

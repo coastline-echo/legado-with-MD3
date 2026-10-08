@@ -57,7 +57,6 @@ import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.help.config.SettingsWriter
 import io.legado.app.help.config.ThemeConfigStore
-import io.legado.app.help.storage.ReadMenuButtonBackup
 import io.legado.app.model.BookCover
 import io.legado.app.model.localBook.LocalBook
 import io.legado.app.utils.ACache
@@ -382,7 +381,7 @@ private fun previewCategory(name: String): String = when (name) {
         "readConfig.json", "shareReadConfig.json" -> "readConfig"
         "themeConfig.json" -> "themeConfig"
         "assets/background" -> "resources"
-        "readSettings.json", ReadMenuButtonBackup.fileName -> "readSettings"
+        "readSettings.json" -> "readSettings"
         else -> name.substringBeforeLast('.', name)
     }
 
@@ -1149,15 +1148,6 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
         }?.onFailure {
             reportCategoryFailure("readSettings", it)
             AppLog.put("恢复阅读设置出错\n${it.localizedMessage}", it)
-        }
-        // 恢复顶栏/底栏按钮配置（独立 SharedPreferences，不在 ReadSettings 中）
-        File(path, ReadMenuButtonBackup.fileName).takeIf {
-            it.isFile && selected("readSettings") && useBackup("readSettings")
-        }?.runCatching {
-            ReadMenuButtonBackup.restore(appCtx, readText())
-        }?.onFailure {
-            reportCategoryFailure("readSettings", it)
-            AppLog.put("恢复菜单按钮配置出错\n${it.localizedMessage}", it)
         }
         // 所有独立配置与 config.xml 写入完成后再刷新运行时快照，避免读取到半成品。
         runCatching { get<ReadStyleGateway>().refresh() }.onFailure {

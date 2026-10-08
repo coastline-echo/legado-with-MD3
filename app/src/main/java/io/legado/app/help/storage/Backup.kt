@@ -151,7 +151,6 @@ object Backup {
             "servers.json",
             DirectLinkUpload.ruleFileName,
             "readSettings.json",
-            ReadMenuButtonBackup.fileName,
             ReadBookConfig.configFileName,
             ReadBookConfig.shareConfigFileName,
             ThemeConfigStore.configFileName,
@@ -407,10 +406,6 @@ if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
             // 导出完整 ReadSettings（文本选择菜单、阅读器 UI 设置等）
             readStyleGateway.readSettingsGateway?.exportJson()?.let { json ->
                 FileUtils.createFileIfNotExist(backupPath + File.separator + "readSettings.json")
-                    .writeText(json)
-            }
-            ReadMenuButtonBackup.export(context)?.let { json ->
-                FileUtils.createFileIfNotExist(backupPath + File.separator + ReadMenuButtonBackup.fileName)
                     .writeText(json)
             }
         }
@@ -807,7 +802,7 @@ webDavUploadAttempted = webDavUploadAttempted,
     private fun manifestCategory(fileName: String): String = when (fileName) {
         "config.xml" -> "settings"
         "readConfig.json", "shareReadConfig.json" -> "readConfig"
-        "readSettings.json", ReadMenuButtonBackup.fileName -> "readSettings"
+        "readSettings.json" -> "readSettings"
         "themeConfig.json" -> "themeConfig"
         "coverRule.json" -> "coverConfig"
         "directLinkUploadRule.json" -> "directLinkUploadRule"
