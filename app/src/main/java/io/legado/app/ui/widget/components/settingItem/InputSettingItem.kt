@@ -102,7 +102,7 @@ fun InputSettingItem(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp),
-                    label = { AppText(stringResource(R.string.edit)) },
+                    label = { AppText(stringResource(R.string.web_dav_url_placeholder)) },
                     contentPadding = PaddingValues(
                         top = 4.dp,
                         bottom = 4.dp,

@@ -3,6 +3,7 @@ package io.legado.app.help.storage
 import java.io.ByteArrayInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
+import org.xml.sax.SAXException
 
 data class BackupConfigEncoding(
     val xml: String,
@@ -73,18 +74,28 @@ object BackupConfigCodec {
     }
 
     fun decodeWithReport(xml: String): BackupConfigDecoding {
+        // Android 与 JVM 的 XML 实现对 setFeature 的支持不同；先拒绝 DTD，避免因不支持
+        // 某个安全特性而把正常的旧版或新版 config.xml 误判为不可识别。
+        if (xml.contains("<!DOCTYPE", ignoreCase = true)) {
+            throw SAXException("备份配置不允许包含 DOCTYPE")
+        }
         val result = linkedMapOf<String, Any?>()
         val warnings = mutableListOf<String>()
         val document = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = false
-            // 配置来自备份文件，不允许外部实体、外部 DTD 或自定义 DOCTYPE。
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-            isXIncludeAware = false
+            // 尽可能关闭外部实体；最终由 DOCTYPE 拒绝与 EntityResolver 兜底。
+            runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+            runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            runCatching { setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) }
+            runCatching { isXIncludeAware = false }
             isExpandEntityReferences = false
-        }.newDocumentBuilder().parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
+        }.newDocumentBuilder().apply {
+            setEntityResolver { _, _ -> throw SAXException("备份配置不允许加载外部实体") }
+        }.parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
+        if (document.documentElement.tagName != "map") {
+            throw SAXException("备份配置根节点不是 map")
+        }
         val nodes = document.documentElement.childNodes
         for (index in 0 until nodes.length) {
             val element = nodes.item(index) as? Element ?: continue

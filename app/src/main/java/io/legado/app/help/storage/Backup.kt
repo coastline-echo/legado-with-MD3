@@ -39,6 +39,7 @@ import io.legado.app.utils.openOutputStream
 import io.legado.app.utils.outputStream
 import io.legado.app.utils.writeToOutputStream
 import io.legado.app.BuildConfig
+import io.legado.app.R
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -150,6 +151,7 @@ object Backup {
             "servers.json",
             DirectLinkUpload.ruleFileName,
             "readSettings.json",
+            ReadMenuButtonBackup.fileName,
             ReadBookConfig.configFileName,
             ReadBookConfig.shareConfigFileName,
             ThemeConfigStore.configFileName,
@@ -205,8 +207,14 @@ suspend fun backupLocked(context: Context, path: String?, mode: String = "both")
                         BackupRestoreResultBus.emit(
                             BackupRestoreResult(
                                 operationId = operationId,
-                                outcome = BackupRestoreOutcome.FAILED,
+                                outcome = if (mode == "webdav") {
+                                    BackupRestoreOutcome.PRECONDITION_FAILED
+                                } else {
+                                    BackupRestoreOutcome.FAILED
+                                },
                                 failures = 1,
+                                webDavUploadAttempted = mode == "webdav",
+                                webDavUploadFailed = mode == "webdav",
                                 parseFailed = true,
                             ),
                         )
@@ -230,6 +238,7 @@ suspend fun backupLocked(context: Context, path: String?, mode: String = "both")
         var localBackupFailed = false
         var webDavUploadAttempted = false
         val sensitiveWarnings = mutableListOf<String>()
+        val sensitiveEncryptionFailures = mutableSetOf<BackupSensitiveCategory>()
         if (mode == "both" || mode == "webdav") {
             // WebDAV 配置必须在本次操作前同步，失败时不能继续复用旧认证状态。
             val syncResult = AppWebDav.upConfig()
@@ -272,6 +281,8 @@ if (BackupConfig.dbIsNotIgnored("bookSource", true)) {
                                 .writeText(encrypted)
                         }
                         .onFailure {
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.BOOK_SOURCE_AUTH
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.REQUEST_HEADERS
                             sensitiveWarnings += "备份书源配置加密失败，已跳过敏感数据"
                             AppLog.put("备份书源配置加密失败，已跳过敏感数据", it)
                         }
@@ -292,6 +303,8 @@ if (BackupConfig.dbIsNotIgnored("bookSource", true)) {
                                 .writeText(encrypted)
                         }
                         .onFailure {
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.RSS_AUTH
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.REQUEST_HEADERS
                             sensitiveWarnings += "备份 RSS 配置加密失败，已跳过敏感数据"
                             AppLog.put("备份 RSS 配置加密失败，已跳过敏感数据", it)
                         }
@@ -330,6 +343,7 @@ if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
                                 .writeText(encrypted)
                         }
                         .onFailure {
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.TTS_API_KEYS
                             sensitiveWarnings += "备份 HTTP TTS 配置加密失败，已跳过敏感数据"
                             AppLog.put("备份 HTTP TTS 配置加密失败，已跳过敏感数据", it)
                         }
@@ -374,6 +388,7 @@ if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
                             .writeText(encrypted)
                     }
                     .onFailure {
+                        sensitiveEncryptionFailures += BackupSensitiveCategory.SERVER_CREDENTIALS
                         sensitiveWarnings += "备份服务器配置加密失败，已跳过敏感数据"
                         AppLog.put("备份服务器配置加密失败，已跳过敏感数据", it)
                     }
@@ -394,6 +409,10 @@ if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
                 FileUtils.createFileIfNotExist(backupPath + File.separator + "readSettings.json")
                     .writeText(json)
             }
+            ReadMenuButtonBackup.export(context)?.let { json ->
+                FileUtils.createFileIfNotExist(backupPath + File.separator + ReadMenuButtonBackup.fileName)
+                    .writeText(json)
+            }
         }
         if (!BackupConfig.backupIgnoreThemeConfig) {
             GSON.toJson(ThemeConfigStore.configList).let {
@@ -410,6 +429,7 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
                                 .writeText(encrypted)
                         }
                         .onFailure {
+                            sensitiveEncryptionFailures += BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS
                             sensitiveWarnings += "备份直链上传配置加密失败，已跳过敏感数据"
                             AppLog.put("备份直链上传配置加密失败，已跳过敏感数据", it)
                         }
@@ -443,6 +463,7 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
             }
             val finalValue = if (key == PreferKey.webDavPassword) {
                 runCatching { BackupSensitiveEnvelope.encrypt(aes, value.toString()) }.getOrElse {
+                    sensitiveEncryptionFailures += BackupSensitiveCategory.WEBDAV_CREDENTIALS
                     sensitiveWarnings += "备份配置加密失败，已跳过敏感键：$key"
                     AppLog.put("备份配置加密失败，已跳过敏感键：$key", it)
                     return@forEach
@@ -459,7 +480,8 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         FileUtils.createFileIfNotExist(backupPath + File.separator + "config.xml")
             .writeText(configEncoding.xml)
 
-        val (resourceFiles, resourceAliases, resourceWarnings) = copyBackgroundResources(backupPath)
+        val (resourceFiles, originalResourceAliases, resourceWarnings) = copyBackgroundResources(backupPath)
+        val resourceAliases = redactResourceAliases(File(backupPath), originalResourceAliases)
         val manifestWarnings = resourceWarnings + sensitiveWarnings
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.PROCESS_RESOURCES, resourceFiles.size, resourceFiles.size))
 
@@ -467,6 +489,103 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
             .filter { it != "manifest.json" }
             .map { File(backupPath, it) }
             .filter(File::isFile)
+        val manifestCategoryByFile = filesForManifest.associateWith { manifestCategory(it.name) }
+        val manifestCategories = manifestCategoryByFile.values.toSet()
+        val ignoredManifestCategories = BackupConfig.backupIgnoreConfig
+            .filterValues { it }
+            .keys
+        val categoryStatus = BackupRestoreCategoryCatalog.allCategories.associateWith { category ->
+            when {
+                category == "resources" && resourceFiles.isNotEmpty() -> "已写入"
+                category in manifestCategories -> "已写入"
+                category in ignoredManifestCategories -> "已忽略"
+                else -> "未写入"
+            }
+        }
+        val categoryLabels = mapOf(
+            "bookshelf" to "书架", "bookmark" to "书签与划线", "bookGroup" to "书籍分组",
+            "bookSource" to "书源", "rssSource" to "RSS 源", "rssStar" to "RSS 收藏",
+            "replaceRule" to "替换规则", "searchHistory" to "搜索历史", "readRecord" to "阅读记录",
+            "server" to "服务器", "sourceSub" to "书源订阅", "txtTocRule" to "文本目录规则",
+            "httpTTS" to "HTTP TTS", "keyboardAssists" to "键盘辅助", "dictRule" to "字典规则",
+            "homepageModules" to "首页模块", "homepageCustomSets" to "首页自定义布局",
+            "highlightRule" to "高亮规则", "highlightTagRule" to "高亮标签规则", "tagGroupRule" to "标签分组",
+            "settings" to "应用设置", "readConfig" to "阅读器配置", "themeConfig" to "主题与外观",
+            "coverConfig" to "封面配置", "directLinkUploadRule" to "直链上传", "resources" to "背景资源",
+            "readSettings" to "完整阅读器设置",
+        )
+        val categoryStatusDetails = categoryStatus.mapValues { (category, status) ->
+            when (status) {
+                "已写入" -> ""
+                "已忽略" -> "已按备份忽略设置跳过"
+                else -> when {
+                    category == "bookSource" && sensitiveEncryptionFailures.any {
+                        it == BackupSensitiveCategory.BOOK_SOURCE_AUTH || it == BackupSensitiveCategory.REQUEST_HEADERS
+                    } -> appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+                    category == "rssSource" && sensitiveEncryptionFailures.any {
+                        it == BackupSensitiveCategory.RSS_AUTH || it == BackupSensitiveCategory.REQUEST_HEADERS
+                    } -> appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+                    category == "httpTTS" && BackupSensitiveCategory.TTS_API_KEYS in sensitiveEncryptionFailures ->
+                        appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+                    category == "server" && BackupSensitiveCategory.SERVER_CREDENTIALS in sensitiveEncryptionFailures ->
+                        appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+                    category == "directLinkUploadRule" &&
+                        BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS in sensitiveEncryptionFailures ->
+                        appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+                    category in setOf("server", "directLinkUploadRule") -> "未选择对应敏感信息"
+                    else -> "本次没有可写入内容"
+                }
+            }
+        }
+        fun sensitiveStatus(category: BackupSensitiveCategory, hasValue: Boolean, vararg fileNames: String): String = when {
+            !BackupConfig.sensitiveSelection.includes(category) -> "未选择"
+            category in sensitiveEncryptionFailures -> appCtx.getString(R.string.backup_sensitive_encrypt_failed)
+            !hasValue -> "无可写入内容"
+            fileNames.none { fileName -> filesForManifest.any { it.name == fileName } } -> "无可写入内容"
+            else -> "已加密写入"
+        }
+        val bookSources = appDb.bookSourceDao.all
+        val rssSources = appDb.rssSourceDao.all
+        val httpTtsSources = appDb.httpTTSDao.all
+        val sensitiveStatus = mapOf(
+            "WEBDAV_CREDENTIALS" to sensitiveStatus(
+                BackupSensitiveCategory.WEBDAV_CREDENTIALS,
+                PreferKey.webDavPassword in writtenConfigKeys &&
+                    !configMap[PreferKey.webDavPassword]?.toString().isNullOrBlank(),
+                "config.xml",
+            ),
+            "SERVER_CREDENTIALS" to sensitiveStatus(
+                BackupSensitiveCategory.SERVER_CREDENTIALS,
+                appDb.serverDao.all.isNotEmpty(),
+                "servers.json",
+            ),
+            "BOOK_SOURCE_AUTH" to sensitiveStatus(
+                BackupSensitiveCategory.BOOK_SOURCE_AUTH,
+                bookSources.any { !it.loginUrl.isNullOrBlank() || !it.loginUi.isNullOrBlank() || !it.loginCheckJs.isNullOrBlank() },
+                "bookSource.json",
+            ),
+            "REQUEST_HEADERS" to sensitiveStatus(
+                BackupSensitiveCategory.REQUEST_HEADERS,
+                bookSources.any { !it.header.isNullOrBlank() } || rssSources.any { !it.header.isNullOrBlank() },
+                "bookSource.json", "rssSources.json",
+            ),
+            "RSS_AUTH" to sensitiveStatus(
+                BackupSensitiveCategory.RSS_AUTH,
+                rssSources.any { !it.loginUrl.isNullOrBlank() || !it.loginUi.isNullOrBlank() || !it.loginCheckJs.isNullOrBlank() },
+                "rssSources.json",
+            ),
+            "TTS_API_KEYS" to sensitiveStatus(
+                BackupSensitiveCategory.TTS_API_KEYS,
+                httpTtsSources.any { !it.header.isNullOrBlank() || !it.loginUrl.isNullOrBlank() ||
+                    !it.loginUi.isNullOrBlank() || !it.loginCheckJs.isNullOrBlank() },
+                "httpTTS.json",
+            ),
+            "DIRECT_LINK_CREDENTIALS" to sensitiveStatus(
+                BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS,
+                filesForManifest.any { it.name == DirectLinkUpload.ruleFileName },
+                DirectLinkUpload.ruleFileName,
+            ),
+        )
         val configIntegrity = BackupConfigIntegrityChecker.check(
             snapshotKeys = configMap.keys,
             written = writtenConfigKeys,
@@ -474,14 +593,54 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
             unsupported = unsupportedConfigKeys,
             requiredKeys = requiredConfigKeys,
         )
+        // 未设置的键没有进入持久化快照，是正常状态；仍在清单中说明，但不计为备份警告。
         warningCount += configIntegrity.unsupported.size +
-            configIntegrity.failed.size + configIntegrity.notSet.size + manifestWarnings.size
+            configIntegrity.failed.size + manifestWarnings.size
+        val manifestCounts = manifestCategoryCounts(filesForManifest)
+        val manifestFileNamesByCategory = manifestCategoryByFile.entries
+            .groupBy({ it.value }, { it.key.name })
+        val manifestCategoryOrder = (
+            listOf("settings", "readSettings", "themeConfig", "readConfig", "coverConfig", "resources") +
+                BackupRestoreCategoryCatalog.allCategories + manifestCategories
+            ).distinct()
         val manifest = BackupManifestBuilder.build(
             root = File(backupPath),
             files = filesForManifest,
-            categories = filesForManifest.groupBy { manifestCategory(it.name) }
-                .mapValues { (_, files) -> files.map(File::getName) },
-            categoryCounts = manifestCategoryCounts(filesForManifest),
+            categories = manifestCategoryOrder.map { category ->
+                BackupManifestCategory(
+                    id = category,
+                    name = categoryLabels[category] ?: appCtx.getString(R.string.restore_category_other),
+                    status = categoryStatus[category] ?: "已写入",
+                    detail = categoryStatusDetails[category].orEmpty(),
+                    count = when (category) {
+                        "settings" -> configIntegrity.written.size
+                        "resources" -> resourceFiles.size
+                        else -> manifestCounts[category] ?: 0
+                    },
+                    files = if (category == "resources") {
+                        resourceFiles.map { "assets/background/${it.name}" }.sorted()
+                    } else {
+                        manifestFileNamesByCategory[category].orEmpty().sorted()
+                    },
+                )
+            },
+            sensitiveCategories = sensitiveStatus.map { (category, status) ->
+                BackupManifestSensitiveCategory(
+                    id = category,
+                    name = appCtx.getString(
+                        when (category) {
+                            "WEBDAV_CREDENTIALS" -> R.string.backup_sensitive_webdav
+                            "SERVER_CREDENTIALS" -> R.string.backup_sensitive_server
+                            "BOOK_SOURCE_AUTH" -> R.string.backup_sensitive_source
+                            "REQUEST_HEADERS" -> R.string.backup_sensitive_headers
+                            "RSS_AUTH" -> R.string.backup_sensitive_rss
+                            "TTS_API_KEYS" -> R.string.backup_sensitive_tts
+                            else -> R.string.backup_sensitive_direct_link
+                        }
+                    ),
+                    status = status,
+                )
+            },
             ignoredCategories = BackupConfig.backupIgnoreConfig.filterValues { it }.keys,
             restoreIgnoredCategories = buildSet {
                 addAll(BackupConfig.dbIgnoreConfig.filterValues { it }.keys)
@@ -489,47 +648,57 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
                 if (BackupConfig.ignoreThemeConfig) add("themeConfig")
                 if (BackupConfig.ignoreCoverConfig) add("coverConfig")
             },
-            configKeys = writtenConfigKeys,
-            ignoredConfigKeys = ignoredConfigKeys,
-            unsupportedConfigKeys = unsupportedConfigKeys,
-            failedConfigKeys = configIntegrity.failed,
-            notSetConfigKeys = configIntegrity.notSet,
+            configItems = (configMap.keys + configIntegrity.notSet).map { key ->
+                BackupManifestConfigItem(
+                    key = key,
+                    name = configKeyLabel(key),
+                    status = configKeyStatusLabel(configIntegrity.status(key)),
+                )
+            },
             appVersion = BuildConfig.VERSION_NAME,
             resources = resourceFiles,
             resourceAliases = resourceAliases,
             warnings = manifestWarnings,
-sensitiveIncluded = filesForManifest.any { it.name == "servers.json" } ||
-                filesForManifest.any { it.name == DirectLinkUpload.ruleFileName } ||
-                PreferKey.webDavPassword in writtenConfigKeys ||
-                BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH) ||
-                BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.REQUEST_HEADERS) ||
-                BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH) ||
-                BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS),
+sensitiveIncluded = sensitiveStatus.values.any { it == "已加密写入" },
 sensitiveItems = buildSet {
-                if (filesForManifest.any { it.name == "servers.json" }) {
+                if (sensitiveStatus["SERVER_CREDENTIALS"] == "已加密写入") {
                     add(BackupSensitiveCategory.SERVER_CREDENTIALS.name)
                     appDb.serverDao.all.forEach { server -> add("server:${server.id}") }
                 }
-                if (PreferKey.webDavPassword in writtenConfigKeys) {
+                if (sensitiveStatus["WEBDAV_CREDENTIALS"] == "已加密写入") {
                     add(BackupSensitiveCategory.WEBDAV_CREDENTIALS.name)
                 }
-                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.BOOK_SOURCE_AUTH)) {
+                if (sensitiveStatus["BOOK_SOURCE_AUTH"] == "已加密写入") {
                     add(BackupSensitiveCategory.BOOK_SOURCE_AUTH.name)
-                    appDb.bookSourceDao.all.forEach { source -> add("bookSource:${stableSensitiveIdentifier(source.bookSourceUrl)}") }
+                    bookSources.filter { !it.loginUrl.isNullOrBlank() || !it.loginUi.isNullOrBlank() ||
+                        !it.loginCheckJs.isNullOrBlank() }.forEach { source ->
+                        add("bookSource:${stableSensitiveIdentifier(source.bookSourceUrl)}")
+                    }
                 }
-                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.REQUEST_HEADERS)) {
+                if (sensitiveStatus["REQUEST_HEADERS"] == "已加密写入") {
                     add(BackupSensitiveCategory.REQUEST_HEADERS.name)
-                    appDb.bookSourceDao.all.filter { !it.header.isNullOrBlank() }.forEach { source -> add("bookSourceHeader:${stableSensitiveIdentifier(source.bookSourceUrl)}") }
+                    bookSources.filter { !it.header.isNullOrBlank() }.forEach { source ->
+                        add("bookSourceHeader:${stableSensitiveIdentifier(source.bookSourceUrl)}")
+                    }
+                    rssSources.filter { !it.header.isNullOrBlank() }.forEach { source ->
+                        add("rssSourceHeader:${stableSensitiveIdentifier(source.sourceUrl)}")
+                    }
                 }
-                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.RSS_AUTH)) {
+                if (sensitiveStatus["RSS_AUTH"] == "已加密写入") {
                     add(BackupSensitiveCategory.RSS_AUTH.name)
-                    appDb.rssSourceDao.all.forEach { source -> add("rssSource:${stableSensitiveIdentifier(source.sourceUrl)}") }
+                    rssSources.filter { !it.loginUrl.isNullOrBlank() || !it.loginUi.isNullOrBlank() ||
+                        !it.loginCheckJs.isNullOrBlank() }.forEach { source ->
+                        add("rssSource:${stableSensitiveIdentifier(source.sourceUrl)}")
+                    }
                 }
-                if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)) {
+                if (sensitiveStatus["TTS_API_KEYS"] == "已加密写入") {
                     add(BackupSensitiveCategory.TTS_API_KEYS.name)
-                    appDb.httpTTSDao.all.forEach { source -> add("httpTTS:${source.id}") }
+                    httpTtsSources.filter { !it.header.isNullOrBlank() || !it.loginUrl.isNullOrBlank() ||
+                        !it.loginUi.isNullOrBlank() || !it.loginCheckJs.isNullOrBlank() }.forEach { source ->
+                        add("httpTTS:${source.id}")
+                    }
                 }
-                if (filesForManifest.any { it.name == DirectLinkUpload.ruleFileName }) {
+                if (sensitiveStatus["DIRECT_LINK_CREDENTIALS"] == "已加密写入") {
                     add(BackupSensitiveCategory.DIRECT_LINK_CREDENTIALS.name)
                 }
             },
@@ -595,9 +764,14 @@ sensitiveItems = buildSet {
 BackupRestoreResultBus.emit(
             BackupRestoreResult(
                 operationId = operationId,
-                outcome = if (warningCount == 0) BackupRestoreOutcome.SUCCESS
-                else BackupRestoreOutcome.SUCCESS_WITH_WARNINGS,
+                outcome = classifyBackupOutcome(
+                    localBackupCreated,
+                    webDavUploadAttempted,
+                    webDavUploadFailed,
+                    warningCount,
+                ),
                 warnings = warningCount,
+                failures = (if (localBackupFailed) 1 else 0) + (if (webDavUploadFailed) 1 else 0),
                 writtenConfigKeys = configIntegrity.written.size,
                 ignoredConfigKeys = configIntegrity.ignored.size,
                 unsupportedConfigKeys = configIntegrity.unsupported.size,
@@ -607,6 +781,15 @@ BackupRestoreResultBus.emit(
                 unsupportedConfigKeyNames = configIntegrity.unsupported,
                 failedConfigKeyNames = configIntegrity.failed,
                 notSetConfigKeyNames = configIntegrity.notSet,
+                backupCategoryStatus = manifest.categories.associate { it.id to it.status },
+                backupCategoryLabels = manifest.categories.associate { it.id to it.name },
+                backupCategoryStatusDetails = manifest.categories.associate { it.id to it.detail },
+                backupEmptyCategories = manifest.categories.filter { it.files.isNotEmpty() && it.count == 0 }
+                    .mapTo(linkedSetOf<String>()) { it.id },
+                backupSensitiveStatus = manifest.sensitiveCategories.associate { it.id to it.status },
+                backupConfigKeyStatus = manifest.configItems.associate { it.key to it.status },
+                backupConfigKeyLabels = manifest.configItems.associate { it.key to it.name },
+                backupFileNames = manifest.files.map { it.name } + manifest.resources.map { it.name },
 webDavUploadFailed = webDavUploadFailed,
 localBackupAttempted = localBackupAttempted,
 localBackupCreated = localBackupCreated,
@@ -624,7 +807,7 @@ webDavUploadAttempted = webDavUploadAttempted,
     private fun manifestCategory(fileName: String): String = when (fileName) {
         "config.xml" -> "settings"
         "readConfig.json", "shareReadConfig.json" -> "readConfig"
-        "readSettings.json" -> "readSettings"
+        "readSettings.json", ReadMenuButtonBackup.fileName -> "readSettings"
         "themeConfig.json" -> "themeConfig"
         "coverRule.json" -> "coverConfig"
         "directLinkUploadRule.json" -> "directLinkUploadRule"
@@ -649,6 +832,43 @@ webDavUploadAttempted = webDavUploadAttempted,
         "tagGroupRule.json" -> "tagGroupRule"
         "servers.json" -> "server"
         else -> "other"
+    }
+
+    /** 清单面向人工核对，状态使用中文；配置键本身仍保留原始名称以便定位。 */
+    private fun configKeyStatusLabel(status: BackupConfigKeyStatus): String = when (status) {
+        BackupConfigKeyStatus.WRITTEN -> "已写入"
+        BackupConfigKeyStatus.IGNORED -> "已忽略"
+        BackupConfigKeyStatus.UNSUPPORTED -> "不支持"
+        BackupConfigKeyStatus.WRITE_FAILED -> "写入失败"
+        BackupConfigKeyStatus.NOT_SET -> "未设置"
+    }
+
+    /** 清单同时保留稳定的内部键和用户可读名称，界面只显示名称。 */
+    private fun configKeyLabel(key: String): String = when {
+        key == PreferKey.webDavUrl -> "WebDAV 地址"
+        key == PreferKey.webDavDir -> "WebDAV 目录"
+        key == PreferKey.webDavAccount -> "WebDAV 账号"
+        key == PreferKey.webDavPassword -> "WebDAV 密码"
+        key == PreferKey.backupPath -> "备份路径"
+        key == PreferKey.appTheme -> "应用主题"
+        key == PreferKey.themeMode -> "主题模式"
+        key == PreferKey.language -> "语言"
+        key == PreferKey.fontScale -> "字体缩放"
+        key == PreferKey.ttsEngine -> "朗读引擎"
+        key == PreferKey.ttsSpeechRate -> "朗读语速"
+        key == PreferKey.webService -> "Web 服务"
+        key == PreferKey.webPort -> "Web 服务端口"
+        key == PreferKey.saveTabPosition -> "书架上次选中的分组"
+        key == PreferKey.textSelectMenuConfig -> "文本选择菜单配置"
+        key == PreferKey.readMenuIconShowText -> "阅读菜单显示图标文字"
+        key == PreferKey.readMenuIconStyle -> "阅读菜单图标样式"
+        key == PreferKey.defaultCover -> "默认封面"
+        key == PreferKey.defaultCoverDark -> "夜间默认封面"
+        key == "cover_album_migrated" -> "封面相册迁移状态"
+        key == "selected_cover_album_id" -> "当前封面相册"
+        key == "privacy_policy_ok" -> "隐私政策确认状态"
+        key == "__local_ui_status_migrated_to_settings" -> "界面状态迁移标记"
+        else -> "其他配置项"
     }
 
     /** 记录类别中的数据项数量；加密文件无法解析时回退到当前数据库快照。 */
@@ -881,6 +1101,47 @@ webDavUploadAttempted = webDavUploadAttempted,
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
     }
+}
+
+/** 只有实际写入至少一个目标，备份才能报告成功。 */
+internal fun classifyBackupOutcome(
+    localCreated: Boolean,
+    webDavAttempted: Boolean,
+    webDavFailed: Boolean,
+    warnings: Int,
+): BackupRestoreOutcome = when {
+    !localCreated && (!webDavAttempted || webDavFailed) -> BackupRestoreOutcome.FAILED
+    warnings > 0 -> BackupRestoreOutcome.SUCCESS_WITH_WARNINGS
+    else -> BackupRestoreOutcome.SUCCESS
+}
+
+/** 清单不保存完整 content URI；备份配置改用稳定占位符，恢复时仍可映射到本机路径。 */
+internal fun redactResourceAliases(root: File, aliases: Map<String, String>): Map<String, String> {
+    val safeAliases = linkedMapOf<String, String>()
+    val configFileNames = setOf(
+        "config.xml", ReadBookConfig.configFileName, ReadBookConfig.shareConfigFileName,
+        ThemeConfigStore.configFileName, "readSettings.json", "highlightRule.json",
+        "highlightTagRule.json", "tagGroupRule.json",
+    )
+    val configFiles = configFileNames.map { File(root, it) }.filter(File::isFile)
+    aliases.forEach { (original, relative) ->
+        if (!original.startsWith("content://", ignoreCase = true)) {
+            safeAliases[original] = relative
+            return@forEach
+        }
+        val marker = "legado-backup-resource:${stableSensitiveIdentifier(original)}"
+        val escapedXml = original.replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;")
+            .replace("\"", "&quot;").replace("'", "&apos;")
+        configFiles.forEach { file ->
+            val text = file.readText()
+            val replaced = text.replace(original, marker)
+                .let { value -> if (file.extension == "xml") value.replace(escapedXml, marker) else value }
+            if (replaced != text) file.writeText(replaced)
+        }
+        safeAliases[marker] = relative
+    }
+    return safeAliases
 }
 
 /** 将可能包含凭据的来源地址转换为不可逆但稳定的清单标识。 */

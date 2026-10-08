@@ -16,7 +16,9 @@ class BackupManifestScannerTest {
     fun `legacy directory without manifest is accepted`() {
         val root = Files.createTempDirectory("legacy-backup").toFile()
         try {
-            assertTrue(BackupManifestScanner.scan(root).legacyFormat)
+            val result = BackupManifestScanner.scan(root)
+            assertTrue(result.legacyFormat)
+            assertTrue(result.warnings.isEmpty())
         } finally {
             root.deleteRecursively()
         }
@@ -73,7 +75,9 @@ class BackupManifestScannerTest {
             val manifest = BackupManifestBuilder.build(
                 root = root,
                 files = listOf(payload),
-                categories = mapOf("server" to listOf("servers.json")),
+                categories = listOf(
+                    BackupManifestCategory("server", "服务器", "已写入", files = listOf("servers.json"))
+                ),
                 sensitiveIncluded = true,
                 sensitiveItems = setOf("SERVER_CREDENTIALS"),
                 appVersion = "test",
@@ -140,7 +144,9 @@ class BackupManifestScannerTest {
             val manifest = BackupManifestBuilder.build(
                 root = root,
                 files = listOf(file),
-                categories = mapOf("server" to listOf("servers.json")),
+                categories = listOf(
+                    BackupManifestCategory("server", "服务器", "已写入", files = listOf("servers.json"))
+                ),
                 sensitiveItems = setOf("SERVER_CREDENTIALS"),
             )
             root.resolve("manifest.json").writeText(GSON.toJson(manifest))
@@ -178,26 +184,29 @@ class BackupManifestScannerTest {
                     BackupManifest(
                         createdAt = 1L,
                         appVersion = "1",
-                        categoryCounts = mapOf("bookshelf" to -1, "unknown" to 2),
+                        categories = listOf(
+                            BackupManifestCategory("bookshelf", "书架", "已写入", count = -1),
+                            BackupManifestCategory("bookshelf", "书架", "已写入", files = listOf("missing.json")),
+                        ),
                     ),
                 ),
             )
             val warnings = BackupManifestScanner.scan(root).warnings
             assertTrue(warnings.any { it.contains("类别数量无效") })
-            assertTrue(warnings.any { it.contains("未声明类别") })
+            assertTrue(warnings.any { it.contains("重复类别") })
         } finally {
             root.deleteRecursively()
         }
     }
 
     @Test
-    fun `category counts are backward compatible when omitted`() {
+    fun `empty category list remains valid`() {
         val root = Files.createTempDirectory("legacy-category-counts").toFile()
         try {
             root.resolve("manifest.json").writeText(
                 GSON.toJson(BackupManifest(createdAt = 1L, appVersion = "1")),
             )
-            assertTrue(BackupManifestScanner.scan(root).manifest?.categoryCounts?.isEmpty() == true)
+            assertTrue(BackupManifestScanner.scan(root).manifest?.categories?.isEmpty() == true)
         } finally {
             root.deleteRecursively()
         }

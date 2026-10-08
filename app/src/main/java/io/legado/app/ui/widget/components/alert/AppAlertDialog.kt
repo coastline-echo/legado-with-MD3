@@ -22,7 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ProvideAppDensity
@@ -35,6 +37,9 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 @Composable
 fun AppAlertDialog(
     modifier: Modifier = Modifier,
+    contentMaxHeight: Dp? = null,
+    fixedDialogHeight: Boolean = false,
+    fixedContentHeight: Boolean = false,
     show: Boolean,
     onDismissRequest: () -> Unit,
     title: String? = null,
@@ -52,17 +57,29 @@ fun AppAlertDialog(
         WindowDialog(
             show = show,
             // Miuix 对话框需要显式限制窗口高度，内容区再独立滚动，避免按钮被挤出屏幕。
-            modifier = modifier.then(Modifier.heightIn(max = maxHeight)),
+            modifier = modifier.then(
+                if (fixedDialogHeight) Modifier.height(maxHeight)
+                else Modifier.heightIn(max = maxHeight)
+            ),
             title = title,
             summary = text,
             onDismissRequest = onDismissRequest,
             content = {
                 ProvideAppDensity {
+                    // WindowDialog 的标题和 summary 也占用窗口高度，正文不能按剩余窗口近似值放大，
+                    // 否则正文测量完成后会把底部操作行挤出窗口。正文最多占窗口约一半，超出部分滚动。
+                    val bodyMaxHeight = (contentMaxHeight ?: (maxHeight * 0.52f))
+                        .coerceAtLeast(160.dp)
                     if (content != null) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 12.dp)
+                                // 正文独立滚动，给底部操作按钮预留固定空间，避免 Miuix 窗口裁剪按钮。
+                                .then(
+                                    if (fixedContentHeight) Modifier.height(bodyMaxHeight)
+                                    else Modifier.heightIn(max = bodyMaxHeight)
+                                )
                                 .verticalScroll(rememberScrollState())
                         ) {
                             content()
@@ -103,7 +120,11 @@ fun AppAlertDialog(
         if (show) {
             AlertDialog(
                 onDismissRequest = onDismissRequest,
-                modifier = modifier,
+                modifier = modifier.then(
+                    contentMaxHeight?.let {
+                        if (fixedDialogHeight) Modifier.height(it) else Modifier.heightIn(max = it)
+                    } ?: Modifier
+                ),
                 containerColor = LegadoTheme.colorScheme.surfaceContainer,
                 iconContentColor = LegadoTheme.colorScheme.primary,
                 titleContentColor = LegadoTheme.colorScheme.onSurface,
@@ -112,8 +133,17 @@ fun AppAlertDialog(
                 title = title?.let { { ProvideAppDensity { Text(text = it) } } },
                 text = {
                     ProvideAppDensity {
+                        // MD3 的 contentMaxHeight 限制的是整个弹窗，需要为标题和底部按钮预留空间；
+                        // Miuix 的 contentMaxHeight 仅用于正文区域，不能共用同一个固定高度。
+                        val bodyHeight = contentMaxHeight
+                            ?.minus(168.dp)
+                            ?.coerceAtLeast(120.dp)
                         Column(
-                            modifier = Modifier.verticalScroll(rememberScrollState())
+                            modifier = (if (fixedContentHeight && contentMaxHeight != null) {
+                                Modifier.height(bodyHeight ?: contentMaxHeight)
+                            } else {
+                                Modifier
+                            }).verticalScroll(rememberScrollState())
                         ) {
                             if (text != null) {
                                 SelectionContainer {
@@ -172,6 +202,9 @@ fun <T> AppAlertDialog(
     dismissText: String = "取消",
     onDismiss: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    contentMaxHeight: Dp? = null,
+    fixedDialogHeight: Boolean = false,
+    fixedContentHeight: Boolean = false,
     content: (@Composable (T) -> Unit)? = null
 ) {
     var cachedData by remember { mutableStateOf(data) }
@@ -195,6 +228,9 @@ fun <T> AppAlertDialog(
             title = title,
             text = currentText ?: lastValidText,
             modifier = modifier,
+            contentMaxHeight = contentMaxHeight,
+            fixedDialogHeight = fixedDialogHeight,
+            fixedContentHeight = fixedContentHeight,
             confirmText = confirmText,
             onConfirm = onConfirm?.let { { it(currentData) } },
             dismissText = dismissText,

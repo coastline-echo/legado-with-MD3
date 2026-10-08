@@ -23,6 +23,7 @@ data class BackupConfigUiState(
     val backupDbIgnoreItems: ImmutableList<BackupIgnoreItem> = persistentListOf(),
     val sensitiveItems: ImmutableList<BackupSensitiveItem> = persistentListOf(),
     val lastResult: BackupRestoreResult? = null,
+    val showBackupManifest: Boolean = false,
 )
 
 @Stable
@@ -35,6 +36,11 @@ data class BackupIgnoreItem(
 enum class BackupConfigReportType {
     BACKUP,
     RESTORE,
+}
+
+enum class BackupConfigResultSource {
+    LOCAL,
+    WEBDAV,
 }
 
 @Stable
@@ -84,9 +90,11 @@ sealed interface BackupConfigDialog {
     ) : BackupConfigDialog
     data class ConfigIntegrityReport(
         val result: BackupRestoreResult,
-        val expanded: Boolean = false,
+        val showDetails: Boolean = false,
+        val showAllCategories: Boolean = false,
         val message: String? = null,
         val type: BackupConfigReportType = BackupConfigReportType.BACKUP,
+        val source: BackupConfigResultSource? = null,
     ) : BackupConfigDialog
 }
 
@@ -122,6 +130,9 @@ sealed interface BackupConfigIntent {
     data object SaveSensitiveItems : BackupConfigIntent
     data object DismissDialog : BackupConfigIntent
     data object ToggleConfigReportDetails : BackupConfigIntent
+    data object OpenBackupManifest : BackupConfigIntent
+    data object CloseBackupManifest : BackupConfigIntent
+    data object ToggleAllRestoreCategories : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent
     data class BackupDirectorySelected(val path: String, val runBackup: Boolean) : BackupConfigIntent

@@ -57,6 +57,7 @@ import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.help.config.SettingsWriter
 import io.legado.app.help.config.ThemeConfigStore
+import io.legado.app.help.storage.ReadMenuButtonBackup
 import io.legado.app.model.BookCover
 import io.legado.app.model.localBook.LocalBook
 import io.legado.app.utils.ACache
@@ -117,8 +118,7 @@ object Restore : KoinComponent {
             val scanResult = BackupManifestScanner.scan(root)
             val detailed = previewUnzipped(root.absolutePath, scanResult)
             detailed.copy(
-                warnings = ((if (scanResult.legacyFormat) listOf("旧版备份缺少 manifest.json") else emptyList()) +
-                    scanResult.warnings + detailed.warnings).distinct(),
+                warnings = (scanResult.warnings + detailed.warnings).distinct(),
             )
         }.getOrElse {
             AppLog.put("恢复预览数据扫描失败：${it.localizedMessage}", it)
@@ -148,18 +148,19 @@ object Restore : KoinComponent {
     ): RestorePreview {
         val root = File(path)
         val files = root.walkTopDown().filter(File::isFile).map { root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') }.toList()
-        val categories = files.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
-        scan.manifest?.categoryCounts
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { categories.putAll(it) }
-        files.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let { categories["resources"] = it }
+        val payloadFiles = files.filterNot { it == "manifest.json" }
+        val categories = payloadFiles.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
+        scan.manifest?.categories
+            ?.filter { it.files.isNotEmpty() }
+            ?.forEach { categories[it.id] = it.count }
+        payloadFiles.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let { categories["resources"] = it }
         val legacy = !File(root, "manifest.json").isFile
         return RestorePreview(
             legacyFormat = legacy,
-            fileCount = files.count { !it.startsWith("assets/") },
-            resourceCount = files.count { it.startsWith("assets/") },
+            fileCount = payloadFiles.count { !it.startsWith("assets/") },
+            resourceCount = payloadFiles.count { it.startsWith("assets/") },
             categories = categories,
-            warnings = if (legacy) listOf("旧版备份缺少 manifest.json") else scan.warnings,
+            warnings = scan.warnings,
             sensitiveIncluded = scan.manifest?.sensitiveIncluded == true,
             weakProtection = scan.manifest?.weakProtection == true,
             sensitiveItems = scan.manifest?.sensitiveItems.orEmpty(),
@@ -381,7 +382,7 @@ private fun previewCategory(name: String): String = when (name) {
         "readConfig.json", "shareReadConfig.json" -> "readConfig"
         "themeConfig.json" -> "themeConfig"
         "assets/background" -> "resources"
-        "readSettings.json" -> "readSettings"
+        "readSettings.json", ReadMenuButtonBackup.fileName -> "readSettings"
         else -> name.substringBeforeLast('.', name)
     }
 
@@ -482,7 +483,16 @@ suspend fun restoreLocked(
                 warnings = scan.warnings.size,
             )
         )
-        restore(path, mode, selectedCategories, categoryModes, backupPassword, allowLegacyPlaintextFallback = scan.legacyFormat, operationId = operationId)
+        restore(
+            path,
+            mode,
+            selectedCategories,
+            categoryModes,
+            backupPassword,
+            allowLegacyPlaintextFallback = scan.legacyFormat,
+            operationId = operationId,
+            backupManifest = scan.manifest,
+        )
         return operationId
     }
 
@@ -492,8 +502,9 @@ private suspend fun restore(
         selectedCategories: Set<String>,
         categoryModes: Map<String, RestoreMode>,
         backupPassword: String? = null,
-        allowLegacyPlaintextFallback: Boolean = true,
-        operationId: String,
+    allowLegacyPlaintextFallback: Boolean = true,
+    operationId: String,
+    backupManifest: BackupManifest? = null,
     ) {
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.READ_BACKUP))
         // 统一由 planner 决定类别是否存在、是否被忽略以及覆盖/保留模式；
@@ -518,7 +529,8 @@ private suspend fun restore(
 .toSet()
         val reportedCategories = hashSetOf<String>()
         fun stageForCategory(category: String): BackupRestoreStage = when (category) {
-            "bookshelf", "bookmark", "bookGroup", "bookSource", "rssSource", "rssStar", "replaceRule", "searchHistory", "readRecord", "server", "sourceSub", "txtTocRule", "httpTTS", "keyboardAssists", "dictRule", "homepageModules", "homepageCustomSets", "highlightRule", "highlightTagRule", "tagGroupRule" -> BackupRestoreStage.RESTORE_BOOKSHELF
+            "bookshelf" -> BackupRestoreStage.RESTORE_BOOKSHELF
+            "bookmark", "bookGroup", "bookSource", "rssSource", "rssStar", "replaceRule", "searchHistory", "readRecord", "server", "sourceSub", "txtTocRule", "httpTTS", "keyboardAssists", "dictRule", "homepageModules", "homepageCustomSets", "highlightRule", "highlightTagRule", "tagGroupRule" -> BackupRestoreStage.RESTORE_DATABASE
             "settings", "readConfig", "themeConfig", "coverConfig", "directLinkUploadRule", "readSettings" -> BackupRestoreStage.RESTORE_CONFIG
             "resources" -> BackupRestoreStage.RESTORE_RESOURCES
             else -> BackupRestoreStage.RESTORE_CONFIG
@@ -1098,10 +1110,17 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
         if (selected("settings") && !configFile.exists()) {
             configFileMissing = true
             reportCategoryFailure("settings", NoStackTraceException("备份缺少 config.xml"))
-} else if (selected("settings")) {
-            try {
-                val map = readXmlToMap(configFile)
-                if (map.isNotEmpty()) {
+        } else if (selected("settings")) {
+            val map = try {
+                readXmlToMap(configFile)
+            } catch (e: Exception) {
+                configFileParseFailed = true
+                reportCategoryFailure("settings", e)
+                AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
+                null
+            }
+            if (!map.isNullOrEmpty()) {
+                try {
                     val decryptionFailures = applyConfigMap(
                         map,
                         aes,
@@ -1115,11 +1134,10 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
                             NoStackTraceException("配置敏感字段解密失败：${decryptionFailures.joinToString()}"),
                         )
                     }
+                } catch (e: Exception) {
+                    reportCategoryFailure("settings", e)
+                    AppLog.put("应用配置写入失败\n${e.localizedMessage}", e)
                 }
-            } catch (e: Exception) {
-                configFileParseFailed = true
-                reportCategoryFailure("settings", e)
-                AppLog.put("恢复配置 XML 出错\n${e.localizedMessage}", e)
             }
         }
         // 恢复完整 ReadSettings（文本选择菜单、阅读器 UI 设置等）
@@ -1131,6 +1149,15 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
         }?.onFailure {
             reportCategoryFailure("readSettings", it)
             AppLog.put("恢复阅读设置出错\n${it.localizedMessage}", it)
+        }
+        // 恢复顶栏/底栏按钮配置（独立 SharedPreferences，不在 ReadSettings 中）
+        File(path, ReadMenuButtonBackup.fileName).takeIf {
+            it.isFile && selected("readSettings") && useBackup("readSettings")
+        }?.runCatching {
+            ReadMenuButtonBackup.restore(appCtx, readText())
+        }?.onFailure {
+            reportCategoryFailure("readSettings", it)
+            AppLog.put("恢复菜单按钮配置出错\n${it.localizedMessage}", it)
         }
         // 所有独立配置与 config.xml 写入完成后再刷新运行时快照，避免读取到半成品。
         runCatching { get<ReadStyleGateway>().refresh() }.onFailure {
@@ -1187,6 +1214,18 @@ BackupRestoreResultBus.emit(
                 configFileMissing = configFileMissing,
                 configFileParseFailed = configFileParseFailed,
                 decryptionFailedConfigKeyNames = decryptionFailedConfigKeys.toSet(),
+                backupCategoryStatus = backupManifest?.categories?.associate { it.id to it.status }.orEmpty(),
+                backupCategoryLabels = backupManifest?.categories?.associate { it.id to it.name }.orEmpty(),
+                backupCategoryStatusDetails = backupManifest?.categories?.associate { it.id to it.detail }.orEmpty(),
+                backupEmptyCategories = backupManifest?.categories
+                    ?.filter { it.files.isNotEmpty() && it.count == 0 }
+                    ?.mapTo(linkedSetOf<String>()) { it.id }.orEmpty(),
+                backupSensitiveStatus = backupManifest?.sensitiveCategories?.associate { it.id to it.status }.orEmpty(),
+                backupConfigKeyStatus = backupManifest?.configItems?.associate { it.key to it.status }.orEmpty(),
+                backupConfigKeyLabels = backupManifest?.configItems?.associate { it.key to it.name }.orEmpty(),
+                backupFileNames = backupManifest?.let { manifest ->
+                    manifest.files.map { it.name } + manifest.resources.map { it.name }
+                }.orEmpty(),
             )
         )
     }

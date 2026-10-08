@@ -150,7 +150,10 @@ object BackupManifestScanner {
         declaredEntries: Set<String>,
         warnings: MutableList<String>,
     ) {
-        val categoryEntries = manifest.categories.values.flatten()
+        val categoryEntries = manifest.categories.flatMap { it.files }
+        if (manifest.categories.map { it.id }.distinct().size != manifest.categories.size) {
+            warnings += "类别清单存在重复类别"
+        }
         categoryEntries.filter { it !in declaredEntries }.forEach {
             warnings += "类别清单引用未声明文件：$it"
         }
@@ -180,11 +183,8 @@ object BackupManifestScanner {
         manifest: BackupManifest,
         warnings: MutableList<String>,
     ) {
-        manifest.categoryCounts.forEach { (category, count) ->
-            if (count < 0) warnings += "类别数量无效：$category=$count"
-            if (category !in manifest.categories.keys) {
-                warnings += "类别数量引用未声明类别：$category"
-            }
+        manifest.categories.forEach { category ->
+            if (category.count < 0) warnings += "类别数量无效：${category.id}=${category.count}"
         }
     }
 

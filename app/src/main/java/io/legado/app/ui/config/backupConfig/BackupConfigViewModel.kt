@@ -14,7 +14,6 @@ import io.legado.app.help.storage.BackupRestoreProgressBus
 import io.legado.app.help.storage.BackupRestoreResultBus
 import io.legado.app.domain.model.BackupRestoreResult
 import io.legado.app.domain.model.BackupRestoreOutcome
-import io.legado.app.exception.NoStackTraceException
 import io.legado.app.utils.isContentScheme
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -156,9 +155,23 @@ class BackupConfigViewModel(
             BackupConfigIntent.ToggleConfigReportDetails -> _uiState.update { state ->
                 val dialog = state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport
                     ?: return@update state
-                state.copy(activeDialog = dialog.copy(expanded = !dialog.expanded))
+                state.copy(activeDialog = dialog.copy(showDetails = !dialog.showDetails))
             }
-            BackupConfigIntent.DismissDialog -> _uiState.update { it.copy(activeDialog = null) }
+            BackupConfigIntent.OpenBackupManifest -> _uiState.update { state ->
+                if (state.activeDialog !is BackupConfigDialog.ConfigIntegrityReport) state
+                else state.copy(showBackupManifest = true)
+            }
+            BackupConfigIntent.CloseBackupManifest ->
+                _uiState.update { it.copy(showBackupManifest = false) }
+            BackupConfigIntent.ToggleAllRestoreCategories -> _uiState.update { state ->
+                val dialog = state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport
+                    ?: return@update state
+                if (dialog.type != BackupConfigReportType.RESTORE) return@update state
+                state.copy(activeDialog = dialog.copy(showAllCategories = !dialog.showAllCategories))
+            }
+            BackupConfigIntent.DismissDialog -> _uiState.update {
+                it.copy(activeDialog = null, showBackupManifest = false)
+            }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
             is BackupConfigIntent.BackupDirectorySelected -> saveBackupPath(intent.path, intent.runBackup)
@@ -385,13 +398,9 @@ class BackupConfigViewModel(
             try {
                 val operationId = when (mode) {
                     "webdav" -> {
-                        val syncResult = webDavBackupUseCase.refreshConfig()
-                        if (syncResult.isFailure) throw syncResult.exceptionOrNull() ?: NoStackTraceException("WebDAV 配置同步失败")
                         backupRestoreUseCase.backup(null, "webdav")
                     }
                     "both" -> {
-                        val syncResult = webDavBackupUseCase.refreshConfig()
-                        if (syncResult.isFailure) throw syncResult.exceptionOrNull() ?: NoStackTraceException("WebDAV 配置同步失败")
                         backupRestoreUseCase.backup(path, "both")
                     }
                     else -> {
@@ -404,7 +413,9 @@ class BackupConfigViewModel(
                 activeOperationId = null
                 BackupRestoreResultBus.removeResult(operationId)
                 withContext(Dispatchers.Main) {
-                    _uiState.update { it.copy(activeDialog = BackupConfigDialog.ConfigIntegrityReport(result)) }
+                    _uiState.update {
+                        it.copy(activeDialog = BackupConfigDialog.ConfigIntegrityReport(result))
+                    }
                 }
             } catch (error: Exception) {
                 activeOperationId = null
@@ -589,13 +600,14 @@ class BackupConfigViewModel(
             BackupRestoreResultBus.events.first { it.operationId == operationId }
         }
 
-private suspend fun finishRestoreSuccess(result: BackupRestoreResult, webDav: Boolean = false) = withContext(Dispatchers.Main) {
+    private suspend fun finishRestoreSuccess(result: BackupRestoreResult, webDav: Boolean = false) = withContext(Dispatchers.Main) {
         // 恢复结果使用完整性弹窗展示，避免重要失败信息被短暂提示遮蔽。
         _uiState.update {
             it.copy(
                 activeDialog = BackupConfigDialog.ConfigIntegrityReport(
                     result = result,
                     type = BackupConfigReportType.RESTORE,
+                    source = if (webDav) BackupConfigResultSource.WEBDAV else BackupConfigResultSource.LOCAL,
                 )
             )
         }
@@ -614,6 +626,7 @@ private suspend fun finishRestoreSuccess(result: BackupRestoreResult, webDav: Bo
                         ),
                         message = message,
                         type = BackupConfigReportType.RESTORE,
+                        source = if (webDav) BackupConfigResultSource.WEBDAV else BackupConfigResultSource.LOCAL,
                     ),
                 )
             }
@@ -676,7 +689,8 @@ private companion object {
 
         @Suppress("UNUSED_PARAMETER")
         suspend fun loadSensitiveItems() = withContext(Dispatchers.IO) {
-            BackupSensitiveCategory.entries.map { category ->
+            // OTHER 目前没有对应的备份字段，保留枚举值仅用于兼容旧配置，不在界面展示空选项。
+            BackupSensitiveCategory.entries.filter { it != BackupSensitiveCategory.OTHER }.map { category ->
                 BackupSensitiveItem(
                     category = category,
                     title = category.name,

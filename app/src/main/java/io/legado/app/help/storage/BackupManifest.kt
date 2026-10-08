@@ -6,26 +6,37 @@ import java.security.MessageDigest
 
 /** 新版备份 ZIP 的结构清单。清单不保存敏感字段原文。 */
 data class BackupManifest(
-    val formatVersion: Int = 1,
+    val formatVersion: Int = 2,
     val appVersion: String = "",
     val createdAt: Long,
-    val categories: Map<String, List<String>> = emptyMap(),
-    val categoryCounts: Map<String, Int> = emptyMap(),
+    /** 类别、中文名称、状态和文件集中在同一项，避免平行映射产生矛盾。 */
+    val categories: List<BackupManifestCategory> = emptyList(),
+    val configItems: List<BackupManifestConfigItem> = emptyList(),
+    val sensitiveCategories: List<BackupManifestSensitiveCategory> = emptyList(),
     val files: List<BackupManifestFile> = emptyList(),
     val resources: List<BackupManifestResource> = emptyList(),
     val resourceAliases: Map<String, String> = emptyMap(),
-    val configKeys: Set<String> = emptySet(),
-    val ignoredConfigKeys: Set<String> = emptySet(),
-    val unsupportedConfigKeys: Set<String> = emptySet(),
-    val failedConfigKeys: Set<String> = emptySet(),
-    val notSetConfigKeys: Set<String> = emptySet(),
     val ignoredCategories: Set<String> = emptySet(),
     val restoreIgnoredCategories: Set<String> = emptySet(),
     val sensitiveIncluded: Boolean = false,
     val sensitiveItems: Set<String> = emptySet(),
     val weakProtection: Boolean = false,
     val warnings: List<String> = emptyList(),
-    val legacyFormat: Boolean = false,
+)
+
+data class BackupManifestCategory(
+    val id: String,
+    val name: String,
+    val status: String,
+    val detail: String = "",
+    val count: Int = 0,
+    val files: List<String> = emptyList(),
+)
+
+data class BackupManifestSensitiveCategory(
+    val id: String,
+    val name: String,
+    val status: String,
 )
 
 data class BackupManifestFile(
@@ -40,20 +51,22 @@ data class BackupManifestResource(
     val size: Long,
 )
 
+data class BackupManifestConfigItem(
+    val key: String,
+    val name: String,
+    val status: String,
+)
+
 object BackupManifestBuilder {
 
     fun build(
         root: File,
         files: Collection<File>,
-        categories: Map<String, List<String>> = emptyMap(),
-        categoryCounts: Map<String, Int> = emptyMap(),
+        categories: Collection<BackupManifestCategory> = emptyList(),
+        sensitiveCategories: Collection<BackupManifestSensitiveCategory> = emptyList(),
         ignoredCategories: Set<String> = emptySet(),
         restoreIgnoredCategories: Set<String> = emptySet(),
-        configKeys: Set<String> = emptySet(),
-        ignoredConfigKeys: Set<String> = emptySet(),
-        unsupportedConfigKeys: Set<String> = emptySet(),
-        failedConfigKeys: Set<String> = emptySet(),
-        notSetConfigKeys: Set<String> = emptySet(),
+        configItems: Collection<BackupManifestConfigItem> = emptyList(),
         resources: Collection<File> = emptyList(),
         resourceAliases: Map<String, String> = emptyMap(),
         appVersion: String = "",
@@ -84,16 +97,18 @@ object BackupManifestBuilder {
         return BackupManifest(
             createdAt = System.currentTimeMillis(),
             appVersion = appVersion,
-            categories = categories.mapValues { (_, names) -> names.sorted() },
-            categoryCounts = categoryCounts.toSortedMap(),
+            categories = categories.toList(),
+            sensitiveCategories = sensitiveCategories.toList(),
             files = fileEntries,
             resources = resourceEntries,
             resourceAliases = resourceAliases.toSortedMap(),
-            configKeys = configKeys.toSortedSet(),
-            ignoredConfigKeys = ignoredConfigKeys.toSortedSet(),
-            unsupportedConfigKeys = unsupportedConfigKeys.toSortedSet(),
-            failedConfigKeys = failedConfigKeys.toSortedSet(),
-            notSetConfigKeys = notSetConfigKeys.toSortedSet(),
+            configItems = configItems.sortedWith(
+                compareBy<BackupManifestConfigItem>(
+                    { it.status != "写入失败" && it.status != "不支持" },
+                    { it.name },
+                    { it.key },
+                )
+            ),
             ignoredCategories = ignoredCategories.toSortedSet(),
             restoreIgnoredCategories = restoreIgnoredCategories.toSortedSet(),
             sensitiveIncluded = sensitiveIncluded,
