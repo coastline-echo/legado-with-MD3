@@ -209,7 +209,7 @@ class BackupConfigViewModel(
             }
             is BackupConfigIntent.RequestNetworkRestore -> loadNetworkBackups(intent.mode)
             is BackupConfigIntent.RestoreNetwork -> restoreNetwork(intent.name, selectedRestoreMode)
-            BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore(RestoreMode.KEEP_APPLICATION)
+            BackupConfigIntent.ConfirmLocalRestoreFallback -> requestLocalRestore(selectedRestoreMode)
             BackupConfigIntent.RequestImportOldData -> _uiState.update {
                 it.copy(activeSheet = BackupConfigSheet.ImportOldData)
             }

@@ -92,7 +92,7 @@ fun RestoreOptionSheet(
                 maxItemsInEachRow = 2,
             ) {
                 if (selectedSource == null) {
-                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_source_local),
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.backup_source_local),
                         description = stringResource(R.string.restore_source_local_desc)) {
                         showAdvanced = false
                         source = RestoreSource.LOCAL

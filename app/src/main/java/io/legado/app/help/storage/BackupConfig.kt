@@ -271,6 +271,10 @@ object BackupConfig {
         PreferKey.showMenuIcon,
         PreferKey.titleBarMode,
         PreferKey.shouldShowExpandButton,
+        // 阅读页按钮与更多操作已迁移到 ReadSettings，并随 readSettings.json 统一备份。
+        PreferKey.moreActionsConfig,
+        PreferKey.titleBarButtons,
+        PreferKey.bottomBarButtons,
     )
 
     private val themePrefKeys = arrayOf(

@@ -42,6 +42,7 @@ data class BackupRestoreResult(
     /** 备份清单中的类别覆盖状态，供结果页和离线清单核对。 */
     val backupCategoryStatus: Map<String, String> = emptyMap(),
     val backupCategoryLabels: Map<String, String> = emptyMap(),
+    val backupCategoryCounts: Map<String, Int> = emptyMap(),
     val backupCategoryStatusDetails: Map<String, String> = emptyMap(),
     val backupEmptyCategories: Set<String> = emptySet(),
     val backupSensitiveStatus: Map<String, String> = emptyMap(),

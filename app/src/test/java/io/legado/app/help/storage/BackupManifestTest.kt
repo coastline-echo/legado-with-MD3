@@ -50,7 +50,7 @@ class BackupManifestTest {
             assertEquals(listOf("config.xml"), manifest.categories.single().files)
             assertTrue("theme" in manifest.ignoredCategories)
             assertTrue("readConfig" in manifest.restoreIgnoredCategories)
-            assertEquals("mainNavigationOrder", manifest.configItems.single().key)
+            assertEquals("mainNavigationOrder", manifest.technical.configItems.single().key)
         } finally {
             root.deleteRecursively()
         }
@@ -102,7 +102,7 @@ class BackupManifestTest {
                 ),
             )
             val json = GSON.toJson(manifest)
-            assertEquals(2, manifest.formatVersion)
+            assertEquals(1, manifest.formatVersion)
             assertEquals(listOf("settings", "bookshelf"), manifest.categories.map { it.id })
             assertEquals("未设置", manifest.configItems.single().status)
             assertFalse(json.contains("configKeyLabels"))
@@ -131,6 +131,12 @@ class BackupManifestTest {
             assertTrue(xml.readText().contains(marker))
             assertFalse(json.readText().contains(original))
             assertTrue(unrelated.readText().contains(original))
+
+            val absolute = root.resolve("source-icon.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }.absolutePath
+            val settings = File(root, "readSettings.json").apply { writeText("{\"icon\":\"$absolute\"}") }
+            val absoluteAliases = redactResourceAliases(root, mapOf(absolute to "assets/readMenuCustomIcons/icon.png"))
+            assertFalse(GSON.toJson(absoluteAliases).contains(absolute))
+            assertFalse(settings.readText().contains(absolute))
         } finally {
             root.deleteRecursively()
         }

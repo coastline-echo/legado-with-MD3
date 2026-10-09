@@ -1059,6 +1059,8 @@ sealed interface ConfigUpdateAction {
     data object UpdatePageAnim : ConfigUpdateAction
     /** 文本选择菜单顺序/显示状态恢复后，重新读取 DataStore 配置。 */
     data object RefreshTextSelectionMenu : ConfigUpdateAction
+    /** 阅读页顶栏/底栏按钮配置恢复后，重新读取 ReadSettings。 */
+    data object RefreshReadMenuButtons : ConfigUpdateAction
 }
 
 private val HEADER_FOOTER_TIP_ACTIONS = setOf(

@@ -4,15 +4,38 @@ import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
 
-/** 新版备份 ZIP 的结构清单。清单不保存敏感字段原文。 */
+/** 当前备份 ZIP 清单的格式版本。发生不兼容的清单结构变化时递增。 */
+const val BACKUP_MANIFEST_FORMAT_VERSION = 1
+
+/** 当前分支备份 ZIP 的唯一结构清单；清单不保存敏感字段原文。 */
 data class BackupManifest(
-    val formatVersion: Int = 2,
+    val formatVersion: Int = BACKUP_MANIFEST_FORMAT_VERSION,
     val appVersion: String = "",
     val createdAt: Long,
     /** 类别、中文名称、状态和文件集中在同一项，避免平行映射产生矛盾。 */
     val categories: List<BackupManifestCategory> = emptyList(),
     val configItems: List<BackupManifestConfigItem> = emptyList(),
     val sensitiveCategories: List<BackupManifestSensitiveCategory> = emptyList(),
+    val technical: BackupManifestTechnical = BackupManifestTechnical(),
+)
+
+val BackupManifest.files: List<BackupManifestFile> get() = technical.files
+val BackupManifest.resources: List<BackupManifestResource> get() = technical.resources
+val BackupManifest.resourceAliases: Map<String, String> get() = technical.resourceAliases
+val BackupManifest.ignoredCategories: Set<String> get() = technical.ignoredCategories
+val BackupManifest.restoreIgnoredCategories: Set<String> get() = technical.restoreIgnoredCategories
+val BackupManifest.sensitiveIncluded: Boolean get() = technical.sensitiveIncluded
+val BackupManifest.sensitiveItems: Set<String> get() = technical.sensitiveItems
+val BackupManifest.weakProtection: Boolean get() = technical.weakProtection
+val BackupManifest.warnings: List<String> get() = technical.warnings
+
+/** 同一清单中的技术校验与恢复辅助数据，与用户可读项目分开存放。 */
+data class BackupManifestTechnical(
+    val configItems: List<BackupManifestConfigItem> = emptyList(),
+    val categoryLabels: Map<String, String> = emptyMap(),
+    val sensitiveCategoryLabels: Map<String, String> = emptyMap(),
+    val categoryCounts: Map<String, Int> = emptyMap(),
+    val categoryFiles: Map<String, List<String>> = emptyMap(),
     val files: List<BackupManifestFile> = emptyList(),
     val resources: List<BackupManifestResource> = emptyList(),
     val resourceAliases: Map<String, String> = emptyMap(),
@@ -25,18 +48,18 @@ data class BackupManifest(
 )
 
 data class BackupManifestCategory(
-    val id: String,
-    val name: String,
-    val status: String,
+    val id: String = "",
+    val name: String = "",
+    val status: String = "",
     val detail: String = "",
     val count: Int = 0,
     val files: List<String> = emptyList(),
 )
 
 data class BackupManifestSensitiveCategory(
-    val id: String,
-    val name: String,
-    val status: String,
+    val id: String = "",
+    val name: String = "",
+    val status: String = "",
 )
 
 data class BackupManifestFile(
@@ -52,7 +75,7 @@ data class BackupManifestResource(
 )
 
 data class BackupManifestConfigItem(
-    val key: String,
+    val key: String? = null,
     val name: String,
     val status: String,
 )
@@ -94,27 +117,35 @@ object BackupManifestBuilder {
                 size = canonical.length(),
             )
         }.sortedBy { it.name }
+        val sortedConfigItems = configItems.sortedWith(
+            compareBy<BackupManifestConfigItem>(
+                { it.status != "写入失败" && it.status != "不支持" },
+                { it.name },
+                { it.key },
+            )
+        )
         return BackupManifest(
             createdAt = System.currentTimeMillis(),
             appVersion = appVersion,
             categories = categories.toList(),
             sensitiveCategories = sensitiveCategories.toList(),
-            files = fileEntries,
-            resources = resourceEntries,
-            resourceAliases = resourceAliases.toSortedMap(),
-            configItems = configItems.sortedWith(
-                compareBy<BackupManifestConfigItem>(
-                    { it.status != "写入失败" && it.status != "不支持" },
-                    { it.name },
-                    { it.key },
-                )
+            configItems = sortedConfigItems.map { BackupManifestConfigItem(name = it.name, status = it.status) },
+            technical = BackupManifestTechnical(
+                configItems = sortedConfigItems,
+                categoryLabels = categories.associate { it.id to it.name },
+                sensitiveCategoryLabels = sensitiveCategories.associate { it.id to it.name },
+                categoryCounts = categories.associate { it.id to it.count },
+                categoryFiles = categories.associate { it.id to it.files },
+                files = fileEntries,
+                resources = resourceEntries,
+                resourceAliases = resourceAliases.toSortedMap(),
+                ignoredCategories = ignoredCategories.toSortedSet(),
+                restoreIgnoredCategories = restoreIgnoredCategories.toSortedSet(),
+                sensitiveIncluded = sensitiveIncluded,
+                sensitiveItems = sensitiveItems.toSortedSet(),
+                weakProtection = weakProtection,
+                warnings = warnings.toSortedSet().toList(),
             ),
-            ignoredCategories = ignoredCategories.toSortedSet(),
-            restoreIgnoredCategories = restoreIgnoredCategories.toSortedSet(),
-            sensitiveIncluded = sensitiveIncluded,
-            sensitiveItems = sensitiveItems.toSortedSet(),
-            weakProtection = weakProtection,
-            warnings = warnings.toSortedSet().toList(),
         )
     }
 

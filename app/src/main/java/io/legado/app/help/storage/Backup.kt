@@ -156,7 +156,8 @@ object Backup {
             ThemeConfigStore.configFileName,
             BookCover.configFileName,
             "config.xml",
-            "manifest.json"
+            "manifest.json",
+            "integrity.json"
         )
     }
 
@@ -475,13 +476,17 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         FileUtils.createFileIfNotExist(backupPath + File.separator + "config.xml")
             .writeText(configEncoding.xml)
 
-        val (resourceFiles, originalResourceAliases, resourceWarnings) = copyBackgroundResources(backupPath)
+        val (backgroundFiles, backgroundAliases, backgroundWarnings) = copyBackgroundResources(backupPath)
+        val (menuIconFiles, menuIconAliases, menuIconWarnings) = copyReaderMenuIconResources(backupPath)
+        val resourceFiles = backgroundFiles + menuIconFiles
+        val originalResourceAliases = backgroundAliases + menuIconAliases
+        val resourceWarnings = backgroundWarnings + menuIconWarnings
         val resourceAliases = redactResourceAliases(File(backupPath), originalResourceAliases)
         val manifestWarnings = resourceWarnings + sensitiveWarnings
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.PROCESS_RESOURCES, resourceFiles.size, resourceFiles.size))
 
         val filesForManifest = backupFileNames
-            .filter { it != "manifest.json" }
+            .filter { it != "manifest.json" && it != "integrity.json" }
             .map { File(backupPath, it) }
             .filter(File::isFile)
         val manifestCategoryByFile = filesForManifest.associateWith { manifestCategory(it.name) }
@@ -613,7 +618,7 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
                         else -> manifestCounts[category] ?: 0
                     },
                     files = if (category == "resources") {
-                        resourceFiles.map { "assets/background/${it.name}" }.sorted()
+                        resourceFiles.map { resourceRelativeName(File(backupPath), it) }.sorted()
                     } else {
                         manifestFileNamesByCategory[category].orEmpty().sorted()
                     },
@@ -699,8 +704,23 @@ sensitiveItems = buildSet {
             },
             weakProtection = BackupPasswordPolicyResolver.resolve(LocalConfig.password).weakProtection,
         )
+        val readableManifest = GSON.toJsonTree(manifest).asJsonObject.apply {
+            remove("technical")
+            getAsJsonArray("categories")?.forEach { category ->
+                category.asJsonObject.apply {
+                    remove("id")
+                    remove("count")
+                    remove("files")
+                }
+            }
+            getAsJsonArray("sensitiveCategories")?.forEach { category ->
+                category.asJsonObject.remove("id")
+            }
+        }
         FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
-            .writeText(GSON.toJson(manifest))
+            .writeText(GSON.toJson(readableManifest))
+        FileUtils.createFileIfNotExist(backupPath + File.separator + "integrity.json")
+            .writeText(GSON.toJson(manifest.technical))
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.GENERATE_MANIFEST, filesForManifest.size, filesForManifest.size))
 
         currentCoroutineContext().ensureActive()
@@ -778,12 +798,19 @@ BackupRestoreResultBus.emit(
                 notSetConfigKeyNames = configIntegrity.notSet,
                 backupCategoryStatus = manifest.categories.associate { it.id to it.status },
                 backupCategoryLabels = manifest.categories.associate { it.id to it.name },
+                backupCategoryCounts = manifest.technical.categoryCounts.ifEmpty {
+                    manifest.categories.associate { it.id to it.count }
+                },
                 backupCategoryStatusDetails = manifest.categories.associate { it.id to it.detail },
                 backupEmptyCategories = manifest.categories.filter { it.files.isNotEmpty() && it.count == 0 }
                     .mapTo(linkedSetOf<String>()) { it.id },
                 backupSensitiveStatus = manifest.sensitiveCategories.associate { it.id to it.status },
-                backupConfigKeyStatus = manifest.configItems.associate { it.key to it.status },
-                backupConfigKeyLabels = manifest.configItems.associate { it.key to it.name },
+                backupConfigKeyStatus = manifest.technical.configItems
+                    .filter { !it.key.isNullOrBlank() }
+                    .associate { it.key!! to it.status },
+                backupConfigKeyLabels = manifest.technical.configItems
+                    .filter { !it.key.isNullOrBlank() }
+                    .associate { it.key!! to it.name },
                 backupFileNames = manifest.files.map { it.name } + manifest.resources.map { it.name },
 webDavUploadFailed = webDavUploadFailed,
 localBackupAttempted = localBackupAttempted,
@@ -829,7 +856,7 @@ webDavUploadAttempted = webDavUploadAttempted,
         else -> "other"
     }
 
-    /** 清单面向人工核对，状态使用中文；配置键本身仍保留原始名称以便定位。 */
+    /** 清单面向人工核对，状态使用中文；稳定配置键仅写入 technical 节点供恢复定位。 */
     private fun configKeyStatusLabel(status: BackupConfigKeyStatus): String = when (status) {
         BackupConfigKeyStatus.WRITTEN -> "已写入"
         BackupConfigKeyStatus.IGNORED -> "已忽略"
@@ -838,7 +865,7 @@ webDavUploadAttempted = webDavUploadAttempted,
         BackupConfigKeyStatus.NOT_SET -> "未设置"
     }
 
-    /** 清单同时保留稳定的内部键和用户可读名称，界面只显示名称。 */
+    /** 用户层只写名称和状态；稳定内部键写入 technical.configItems 供恢复使用。 */
     private fun configKeyLabel(key: String): String = when {
         key == PreferKey.webDavUrl -> "WebDAV 地址"
         key == PreferKey.webDavDir -> "WebDAV 目录"
@@ -857,6 +884,23 @@ webDavUploadAttempted = webDavUploadAttempted,
         key == PreferKey.textSelectMenuConfig -> "文本选择菜单配置"
         key == PreferKey.readMenuIconShowText -> "阅读菜单显示图标文字"
         key == PreferKey.readMenuIconStyle -> "阅读菜单图标样式"
+        key == "bookshelfLayout" -> "书架布局"
+        key == "bookshelfSort" -> "书架排序方式"
+        key == "comicStyleSelect" -> "漫画阅读样式"
+        key == "last_backup" -> "上次备份时间"
+        key == "mainNavigationOrder" -> "主导航顺序"
+        key == "navExtended" -> "扩展导航栏"
+        key == "navIconBookshelf" -> "书架导航图标"
+        key == "navIconExplore" -> "发现导航图标"
+        key == "navIconHome" -> "首页导航图标"
+        key == "navIconMy" -> "我的导航图标"
+        key == "navIconRss" -> "RSS 导航图标"
+        key == "readStyleSelect" -> "阅读样式"
+        key == "showBottomView" -> "显示阅读底栏"
+        key == "backupUri" -> "备份位置"
+        key == "app_theme" -> "应用主题"
+        key == "textSelectMenuConfig" -> "文本选择菜单配置"
+        key == "appTtsEngine" -> "朗读引擎"
         key == PreferKey.defaultCover -> "默认封面"
         key == PreferKey.defaultCoverDark -> "夜间默认封面"
         key == "cover_album_migrated" -> "封面相册迁移状态"
@@ -1039,6 +1083,76 @@ webDavUploadAttempted = webDavUploadAttempted,
         return Triple(files, aliases, warnings)
     }
 
+    /** 将阅读页私有资源复制进 ZIP，避免恢复后配置指向失效的旧绝对路径。 */
+    private fun copyReaderMenuIconResources(
+        rootPath: String,
+    ): Triple<List<File>, Map<String, String>, List<String>> {
+        val targets: List<Pair<String, Collection<String>>> = listOf(
+            "readMenuCustomIcons" to ReadBookConfig.readMenuCustomIcons.values.toList(),
+            "titleBarCustomIcons" to ReadBookConfig.titleBarCustomIcons.values.toList(),
+            "bookmarkBadge" to listOfNotNull(
+                GlobalContext.get().get<ReadSettingsGateway>().currentSettings.bookmarkBadgeImage
+                    .takeIf { it.isNotBlank() }
+            ),
+            "highlightResources" to appDb.highlightRuleDao.getAll().flatMap {
+                listOfNotNull(it.bgImage, it.fontPath)
+            },
+        )
+        val files = mutableListOf<File>()
+        val aliases = linkedMapOf<String, String>()
+        val warnings = mutableListOf<String>()
+        targets.forEach { (kind, paths) ->
+            val targetDir = File(rootPath, "assets/$kind").apply { mkdirs() }
+            paths.distinct().forEach { path ->
+                val normalized = path.trim()
+                val isContentUri = normalized.startsWith("content://", ignoreCase = true)
+                val source = if (isContentUri) null else File(normalized)
+                if (source != null && !source.isFile) {
+                    warnings += "备份阅读页资源失败：文件不存在"
+                    return@forEach
+                }
+                runCatching {
+                    if (isContentUri) {
+                        val uri = Uri.parse(normalized)
+                        val resolver = appCtx.contentResolver
+                        val temp = File.createTempFile("reader_resource_", ".tmp", appCtx.cacheDir)
+                        try {
+                            resolver.openInputStream(uri)?.use { input ->
+                                temp.outputStream().use { output -> input.copyTo(output) }
+                            } ?: error("无法读取 content:// 资源")
+                            val hash = temp.sha256()
+                            val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(resolver.getType(uri))
+                                ?.takeIf { it.isNotBlank() }?.let { ".${it.lowercase(Locale.ROOT)}" }.orEmpty()
+                            val target = File(targetDir, "$hash$extension")
+                            if (!target.exists()) temp.copyTo(target, overwrite = false)
+                            aliases[normalized] = resourceRelativeName(File(rootPath), target)
+                            if (files.none { it.name == target.name && it.parentFile == target.parentFile }) files += target
+                        } finally {
+                            temp.delete()
+                        }
+                    } else {
+                        val local = requireNotNull(source)
+                        val hash = local.sha256()
+                        val extension = local.extension.takeIf { it.isNotBlank() }
+                            ?.let { ".${it.lowercase(Locale.ROOT)}" }.orEmpty()
+                        val target = File(targetDir, "$hash$extension")
+                        if (!target.exists()) local.copyTo(target, overwrite = false)
+                        aliases[normalized] = resourceRelativeName(File(rootPath), target)
+                        if (files.none { it.name == target.name && it.parentFile == target.parentFile }) files += target
+                    }
+                }.onFailure {
+                    warnings += "备份阅读页资源失败：无法复制文件"
+                    AppLog.put("备份阅读页资源失败：$path\n${it.localizedMessage}", it)
+                }
+            }
+        }
+        return Triple(files, aliases, warnings)
+    }
+
+    private fun resourceRelativeName(root: File, file: File): String =
+        root.canonicalFile.toPath().relativize(file.canonicalFile.toPath()).toString()
+            .replace(File.separatorChar, '/')
+
     private fun File.sha256(): String {
         val digest = MessageDigest.getInstance("SHA-256")
         inputStream().use { input ->
@@ -1120,7 +1234,8 @@ internal fun redactResourceAliases(root: File, aliases: Map<String, String>): Ma
     )
     val configFiles = configFileNames.map { File(root, it) }.filter(File::isFile)
     aliases.forEach { (original, relative) ->
-        if (!original.startsWith("content://", ignoreCase = true)) {
+        val isAbsolutePath = original.startsWith("/" ) || original.matches(Regex("^[A-Za-z]:[\\\\/].*"))
+        if (!original.startsWith("content://", ignoreCase = true) && !isAbsolutePath) {
             safeAliases[original] = relative
             return@forEach
         }

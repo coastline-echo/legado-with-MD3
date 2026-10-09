@@ -18,9 +18,15 @@ data class BackupScanResult(
 /** 恢复写入前校验 ZIP 解压目录及清单中的文件。 */
 object BackupManifestScanner {
 
+    /** 当前分支清单固定使用 v1 结构；main 无清单时由上层走旧格式路径。 */
+    private fun parseManifest(json: String): BackupManifest {
+        return GSON.fromJson(json, BackupManifest::class.java)
+    }
+
     fun scanZip(input: InputStream): BackupScanResult {
         val entries = linkedMapOf<String, Pair<Long, String>>()
         var manifest: BackupManifest? = null
+        var integrity: BackupManifestTechnical? = null
         var manifestSeen = false
         var manifestWarning: String? = null
         val entryWarnings = mutableListOf<String>()
@@ -37,6 +43,7 @@ object BackupManifestScanner {
                     }
                     val digest = MessageDigest.getInstance("SHA-256")
                     val manifestOutput = if (entry.name == "manifest.json") ByteArrayOutputStream() else null
+                    val integrityOutput = if (entry.name == "integrity.json") ByteArrayOutputStream() else null
                     var size = 0L
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var count = zip.read(buffer)
@@ -44,6 +51,7 @@ object BackupManifestScanner {
                         if (count > 0) {
                             digest.update(buffer, 0, count)
                             manifestOutput?.write(buffer, 0, count)
+                            integrityOutput?.write(buffer, 0, count)
                             size += count
                         }
                         count = zip.read(buffer)
@@ -52,13 +60,16 @@ object BackupManifestScanner {
                     if (manifestOutput != null) {
                         manifestSeen = true
                         manifest = runCatching {
-                            io.legado.app.utils.GSON.fromJson(
-                                manifestOutput.toString(Charsets.UTF_8),
-                                BackupManifest::class.java,
-                            )
+                            parseManifest(manifestOutput.toString(Charsets.UTF_8))
                         }.onFailure {
                             manifestWarning = "manifest.json 解析失败：${it.localizedMessage}"
                         }.getOrNull()
+                    }
+                    if (integrityOutput != null) {
+                        integrity = runCatching {
+                            GSON.fromJson(integrityOutput.toString(Charsets.UTF_8), BackupManifestTechnical::class.java)
+                        }.getOrNull()
+                        if (integrity == null) entryWarnings += "integrity.json 解析失败"
                     }
                     zip.closeEntry()
                 }
@@ -70,11 +81,19 @@ object BackupManifestScanner {
         warnings += entryWarnings.distinct()
         manifestWarning?.let { warnings += it }
         val parsedManifest = manifest
+            ?.copy(technical = integrity ?: manifest.technical)
+            ?.withTechnicalCategoryIds()
+            ?.withTechnicalSensitiveCategoryIds()
             ?: return BackupScanResult(false, warnings = warnings.ifEmpty { listOf("manifest.json 解析失败") })
         warnings += parsedManifest.warnings
-        if (parsedManifest.formatVersion <= 0) warnings += "manifest.json 格式版本无效"
+        if (parsedManifest.formatVersion != BACKUP_MANIFEST_FORMAT_VERSION) {
+            warnings += "manifest.json 格式版本不受支持：${parsedManifest.formatVersion}"
+        }
         if (parsedManifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
         if (parsedManifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
+        if (integrity == null && parsedManifest.technical.files.isEmpty() && parsedManifest.technical.resources.isEmpty()) {
+            warnings += "integrity.json 缺失，无法校验备份文件完整性"
+        }
         val declaredEntries = (parsedManifest.files.map { it.name } + parsedManifest.resources.map { it.name }).toSet()
         if (declaredEntries.size != parsedManifest.files.size + parsedManifest.resources.size) {
             warnings += "manifest.json 存在重复文件声明"
@@ -94,7 +113,7 @@ object BackupManifestScanner {
             }
         }
         entries.keys
-            .filterNot { it == "manifest.json" || it in declaredEntries }
+            .filterNot { it == "manifest.json" || it == "integrity.json" || it in declaredEntries }
             .forEach { warnings += "未登记文件：$it" }
         return BackupScanResult(false, parsedManifest, warnings)
     }
@@ -104,32 +123,47 @@ object BackupManifestScanner {
         if (!manifestFile.isFile) {
             return BackupScanResult(legacyFormat = true)
         }
-        val manifest = runCatching { GSON.fromJson(manifestFile.readText(), BackupManifest::class.java) }
+        val manifest = runCatching { parseManifest(manifestFile.readText()) }
             .getOrElse {
                 return BackupScanResult(
                     false,
                     warnings = listOf("manifest.json 解析失败：${it.localizedMessage}"),
                 )
             }
+        val integrity = File(root, "integrity.json").takeIf(File::isFile)?.let { file ->
+            runCatching {
+                GSON.fromJson(file.readText(), BackupManifestTechnical::class.java)
+            }.getOrElse {
+                null
+            }
+        }
+        val mergedManifest = manifest.copy(technical = integrity ?: manifest.technical)
+            .withTechnicalCategoryIds()
+            .withTechnicalSensitiveCategoryIds()
         val warnings = mutableListOf<String>()
-        warnings += manifest.warnings
-        if (manifest.formatVersion <= 0) warnings += "manifest.json 格式版本无效"
-        if (manifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
-        if (manifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
-        manifest.files.forEach { entry ->
+        warnings += mergedManifest.warnings
+        if (mergedManifest.formatVersion != BACKUP_MANIFEST_FORMAT_VERSION) {
+            warnings += "manifest.json 格式版本不受支持：${mergedManifest.formatVersion}"
+        }
+        if (mergedManifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
+        if (mergedManifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
+        if (integrity == null && mergedManifest.technical.files.isEmpty() && mergedManifest.technical.resources.isEmpty()) {
+            warnings += "integrity.json 缺失，无法校验备份文件完整性"
+        }
+        mergedManifest.files.forEach { entry ->
             validateEntry(root, entry.name, entry.size, entry.sha256, warnings)
         }
-        manifest.resources.forEach { entry ->
+        mergedManifest.resources.forEach { entry ->
             validateEntry(root, entry.name, entry.size, entry.sha256, warnings)
         }
-        val declaredEntries = (manifest.files.map { it.name } + manifest.resources.map { it.name }).toSet()
-        if (declaredEntries.size != manifest.files.size + manifest.resources.size) {
+        val declaredEntries = (mergedManifest.files.map { it.name } + mergedManifest.resources.map { it.name }).toSet()
+        if (declaredEntries.size != mergedManifest.files.size + mergedManifest.resources.size) {
             warnings += "manifest.json 存在重复文件声明"
         }
-        validateCategories(manifest, declaredEntries, warnings)
-        validateCategoryCounts(manifest, warnings)
-        validateResourceAliases(manifest, declaredEntries, warnings)
-        validateSensitiveItems(root, manifest, declaredEntries, warnings)
+        validateCategories(mergedManifest, declaredEntries, warnings)
+        validateCategoryCounts(mergedManifest, warnings)
+        validateResourceAliases(mergedManifest, declaredEntries, warnings)
+        validateSensitiveItems(root, mergedManifest, declaredEntries, warnings)
         val rootPath = root.canonicalFile.toPath()
         root.walkTopDown()
             .filter(File::isFile)
@@ -140,9 +174,9 @@ object BackupManifestScanner {
                     ?: return@mapNotNull null
                 relative to file
             }
-            .filterNot { (name, _) -> name == "manifest.json" || name in declaredEntries }
+            .filterNot { (name, _) -> name == "manifest.json" || name == "integrity.json" || name in declaredEntries }
             .forEach { (name, _) -> warnings += "未登记文件：$name" }
-        return BackupScanResult(false, manifest, warnings)
+        return BackupScanResult(false, mergedManifest, warnings)
     }
 
     private fun validateCategories(
@@ -150,7 +184,11 @@ object BackupManifestScanner {
         declaredEntries: Set<String>,
         warnings: MutableList<String>,
     ) {
-        val categoryEntries = manifest.categories.flatMap { it.files }
+        val categoryEntries = if (manifest.technical.categoryFiles.isNotEmpty()) {
+            manifest.technical.categoryFiles.values.flatten()
+        } else {
+            manifest.categories.flatMap { it.files }
+        }
         if (manifest.categories.map { it.id }.distinct().size != manifest.categories.size) {
             warnings += "类别清单存在重复类别"
         }
@@ -164,6 +202,34 @@ object BackupManifestScanner {
         declaredEntries.filterNot { it in categoryEntries || it in resourceEntries }.forEach {
             warnings += "文件未归入任何类别：$it"
         }
+    }
+
+    private fun BackupManifest.withTechnicalCategoryIds(): BackupManifest {
+        if (categories.all { it.id.isNotBlank() } || technical.categoryLabels.isEmpty()) return this
+        return copy(
+            categories = categories.map { category ->
+                if (category.id.isNotBlank()) category else category.copy(
+                    id = technical.categoryLabels.entries
+                        .firstOrNull { (_, label) -> label == category.name }
+                        ?.key
+                        .orEmpty(),
+                )
+            },
+        )
+    }
+
+    private fun BackupManifest.withTechnicalSensitiveCategoryIds(): BackupManifest {
+        if (sensitiveCategories.all { it.id.isNotBlank() } || technical.sensitiveCategoryLabels.isEmpty()) return this
+        return copy(
+            sensitiveCategories = sensitiveCategories.map { category ->
+                if (category.id.isNotBlank()) category else category.copy(
+                    id = technical.sensitiveCategoryLabels.entries
+                        .firstOrNull { (_, label) -> label == category.name }
+                        ?.key
+                        .orEmpty(),
+                )
+            },
+        )
     }
 
     private fun validateResourceAliases(
@@ -183,8 +249,11 @@ object BackupManifestScanner {
         manifest: BackupManifest,
         warnings: MutableList<String>,
     ) {
-        manifest.categories.forEach { category ->
-            if (category.count < 0) warnings += "类别数量无效：${category.id}=${category.count}"
+        val counts = manifest.technical.categoryCounts.ifEmpty {
+            manifest.categories.associate { it.id to it.count }
+        }
+        counts.forEach { (category, count) ->
+            if (count < 0) warnings += "类别数量无效：$category=$count"
         }
     }
 

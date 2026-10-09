@@ -11,11 +11,11 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * 阅读菜单按钮配置域（R2.2 续批）。
+ * 阅读菜单按钮配置域。
  *
  * 管顶栏/底栏按钮与「更多操作」菜单项的排序与开关，以及两处自定义图标的落盘。
- * 按钮列表本身仍住在 [ReadMenuConfig] 里（菜单栏各处直读，搬出去要改一大片 UI），
- * 故本 delegate **无自持状态**，和 [ReadConfigUpdateDelegate] 同形：一切读写经 [Host]。
+ * 按钮列表统一存放在 ReadSettings DataStore，本 delegate 不自持业务状态，
+ * 通过 [Host] 为菜单栏提供读写和刷新通知。
  *
  * 顶栏/底栏按钮配置与「更多操作」统一存 DataStore（ReadSettings），随 readSettings.json
  * 一起备份恢复；旧版存在 SharedPreferences 中的配置在首次启动时迁移一次。
@@ -36,15 +36,22 @@ class ReadButtonConfigDelegate(
 
     /** 从 DataStore 读回按钮配置，同时把旧 SP 数据迁一次。VM 构造时调一次。 */
     fun refresh() {
-        val settings = readSettingsRepository.currentSettings
+        scope.launch {
+            // 旧版 SP 迁移必须先完成，再读取 DataStore；否则首次打开阅读页会先显示默认按钮，
+            // 异步迁移完成后却没有可靠的二次刷新，表现为“恢复失败”。
+            migrateLegacySharedPrefs()
+            publishButtonSettings(readSettingsRepository.currentSettings)
+        }
+    }
+
+    private fun publishButtonSettings(settings: io.legado.app.domain.model.settings.ReadSettings) {
         host.updateMenuConfig {
             it.copy(
                 titleBarButtons = parseButtonConfig(settings.titleBarButtons).toImmutableList(),
                 bottomBarButtons = parseButtonConfig(settings.bottomBarButtons).toImmutableList(),
+                moreActionItems = parseMoreActions(settings.moreActionsConfig).toImmutableList(),
             )
         }
-        // 旧版 SP 迁移：只跑一次，迁完清空 SP
-        migrateLegacySharedPrefs()
     }
 
     fun saveTitleBarButtons(items: List<ReadBookButtonConfigItem>) {
@@ -80,6 +87,7 @@ class ReadButtonConfigDelegate(
                 )
             }
         }
+        host.updateMenuConfig { it.copy(moreActionItems = normalized.toImmutableList()) }
     }
 
     fun parseMoreActions(raw: String): List<ReadBookButtonConfigItem> {
@@ -184,7 +192,7 @@ private fun parseButtonConfig(raw: String): List<ReadBookButtonConfigItem> {
         items.joinToString(";") { "${it.id},${it.enabled}" }
 
     /** 旧版顶栏/底栏按钮配置存在 SharedPreferences 中，首次启动迁到 DataStore 后清空。 */
-    private fun migrateLegacySharedPrefs() {
+    private suspend fun migrateLegacySharedPrefs() {
         val migrated = context
             .getSharedPreferences(MIGRATED_FLAG_PREFS, Context.MODE_PRIVATE)
             .getBoolean(MIGRATED_FLAG_KEY, false)
@@ -196,14 +204,17 @@ private fun parseButtonConfig(raw: String): List<ReadBookButtonConfigItem> {
             .getSharedPreferences(TOOL_BUTTON_PREFS, Context.MODE_PRIVATE)
             .getString(TOOL_BUTTON_KEY, null)
         if (titleBarRaw != null || bottomBarRaw != null) {
-            scope.launch {
-                readSettingsRepository.update { settings ->
-                    settings.copy(
-                        titleBarButtons = titleBarRaw ?: settings.titleBarButtons,
-                        bottomBarButtons = bottomBarRaw ?: settings.bottomBarButtons,
-                    )
-                }
+            readSettingsRepository.update { settings ->
+                settings.copy(
+                    // 已有 ReadSettings（例如刚从备份恢复）优先，不能被旧设备 SP 反向覆盖。
+                    titleBarButtons = settings.titleBarButtons.ifBlank { titleBarRaw.orEmpty() },
+                    bottomBarButtons = settings.bottomBarButtons.ifBlank { bottomBarRaw.orEmpty() },
+                )
             }
+            context.getSharedPreferences(TITLE_BAR_PREFS, Context.MODE_PRIVATE)
+                .edit().remove(TITLE_BAR_KEY).apply()
+            context.getSharedPreferences(TOOL_BUTTON_PREFS, Context.MODE_PRIVATE)
+                .edit().remove(TOOL_BUTTON_KEY).apply()
         }
         context
             .getSharedPreferences(MIGRATED_FLAG_PREFS, Context.MODE_PRIVATE)

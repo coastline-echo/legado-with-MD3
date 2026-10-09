@@ -13,6 +13,39 @@ import org.junit.Test
 class BackupManifestScannerTest {
 
     @Test
+    fun `readable manifest and integrity file are merged for validation`() {
+        val root = Files.createTempDirectory("split-manifest").toFile()
+        try {
+            val file = root.resolve("bookshelf.json").apply { writeText("[]") }
+            val full = BackupManifestBuilder.build(
+                root = root,
+                files = listOf(file),
+                categories = listOf(
+                    BackupManifestCategory("bookshelf", "书架", "已备份", files = listOf("bookshelf.json")),
+                ),
+                appVersion = "test",
+            )
+            val readable = GSON.toJsonTree(full).asJsonObject.apply {
+                remove("technical")
+                getAsJsonArray("categories").forEach { category ->
+                    category.asJsonObject.remove("id")
+                    category.asJsonObject.remove("count")
+                    category.asJsonObject.remove("files")
+                }
+            }
+            root.resolve("manifest.json").writeText(GSON.toJson(readable))
+            root.resolve("integrity.json").writeText(GSON.toJson(full.technical))
+
+            val result = BackupManifestScanner.scan(root)
+            assertTrue(result.isUsable)
+            assertEquals("bookshelf", result.manifest?.categories?.single()?.id)
+            assertTrue(result.warnings.isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `legacy directory without manifest is accepted`() {
         val root = Files.createTempDirectory("legacy-backup").toFile()
         try {
@@ -125,7 +158,7 @@ class BackupManifestScannerTest {
                     BackupManifest(
                         createdAt = 1L,
                         appVersion = "1",
-                        sensitiveItems = setOf(""),
+                        technical = BackupManifestTechnical(sensitiveItems = setOf("")),
                     ),
                 ),
             )
@@ -165,7 +198,7 @@ class BackupManifestScannerTest {
                     BackupManifest(
                         createdAt = 1L,
                         appVersion = "1",
-                        sensitiveItems = setOf("SERVER_CREDENTIALS"),
+                        technical = BackupManifestTechnical(sensitiveItems = setOf("SERVER_CREDENTIALS")),
                     ),
                 ),
             )
@@ -223,9 +256,11 @@ class BackupManifestScannerTest {
                     GSON.toJson(
                         BackupManifest(
                             createdAt = 1L,
-                            files = emptyList(),
-                            resources = emptyList(),
-                        ),
+                            technical = BackupManifestTechnical(
+                                files = emptyList(),
+                                resources = emptyList(),
+                            ),
+                        )
                     ).toByteArray(),
                 )
                 output.closeEntry()

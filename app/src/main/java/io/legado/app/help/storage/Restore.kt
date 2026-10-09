@@ -147,7 +147,7 @@ object Restore : KoinComponent {
     ): RestorePreview {
         val root = File(path)
         val files = root.walkTopDown().filter(File::isFile).map { root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') }.toList()
-        val payloadFiles = files.filterNot { it == "manifest.json" }
+        val payloadFiles = files.filterNot { it == "manifest.json" || it == "integrity.json" }
         val categories = payloadFiles.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
         scan.manifest?.categories
             ?.filter { it.files.isNotEmpty() }
@@ -1161,6 +1161,7 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
                     ConfigUpdateAction.UpdateStyle,
                     ConfigUpdateAction.ReloadContent,
                     ConfigUpdateAction.RefreshTextSelectionMenu,
+                    ConfigUpdateAction.RefreshReadMenuButtons,
                 )
             )
         }.onFailure {
@@ -1211,8 +1212,14 @@ BackupRestoreResultBus.emit(
                     ?.filter { it.files.isNotEmpty() && it.count == 0 }
                     ?.mapTo(linkedSetOf<String>()) { it.id }.orEmpty(),
                 backupSensitiveStatus = backupManifest?.sensitiveCategories?.associate { it.id to it.status }.orEmpty(),
-                backupConfigKeyStatus = backupManifest?.configItems?.associate { it.key to it.status }.orEmpty(),
-                backupConfigKeyLabels = backupManifest?.configItems?.associate { it.key to it.name }.orEmpty(),
+                backupConfigKeyStatus = backupManifest?.technical?.configItems
+                    ?.filter { !it.key.isNullOrBlank() }
+                    ?.associate { it.key!! to it.status }
+                    .orEmpty(),
+                backupConfigKeyLabels = backupManifest?.technical?.configItems
+                    ?.filter { !it.key.isNullOrBlank() }
+                    ?.associate { it.key!! to it.name }
+                    .orEmpty(),
                 backupFileNames = backupManifest?.let { manifest ->
                     manifest.files.map { it.name } + manifest.resources.map { it.name }
                 }.orEmpty(),
@@ -1420,12 +1427,13 @@ private fun restorePlannerCategories(
             return failures
         }
         manifest.resources.forEach { resource ->
-            if (!resource.name.startsWith("assets/background/")) return@forEach
+            val targetDir = resourceTargetDirectory(resource.name) ?: return@forEach
             runCatching {
                 val source = File(path, resource.name)
                 if (!source.isFile) error("资源不存在")
                 if (source.length() != resource.size) error("资源大小不匹配")
                 if (source.sha256() != resource.sha256) error("资源校验失败")
+                targetDir.mkdirs()
                 val target = File(targetDir, source.name)
                 source.copyTo(target, overwrite = true)
                 restoredResources += resource.name
@@ -1449,13 +1457,23 @@ private fun restorePlannerCategories(
                 var text = file.readText()
                 manifest.resourceAliases.forEach { (alias, relative) ->
                     if (relative !in restoredResources) return@forEach
-                    val localName = relative.substringAfterLast('/')
-                    text = text.replace(alias, targetDir.resolve(localName).absolutePath)
+                    val target = resourceTargetDirectory(relative)?.resolve(relative.substringAfterLast('/'))
+                        ?: return@forEach
+                    text = text.replace(alias, target.absolutePath)
                 }
                 file.writeText(text)
             }
         }
         return failures
+    }
+
+    private fun resourceTargetDirectory(relative: String): File? = when {
+        relative.startsWith("assets/background/") -> appCtx.externalFiles.getFile("bg")
+        relative.startsWith("assets/readMenuCustomIcons/") -> File(appCtx.filesDir, "read_menu_icons")
+        relative.startsWith("assets/titleBarCustomIcons/") -> File(appCtx.filesDir, "title_bar_icons")
+        relative.startsWith("assets/bookmarkBadge/") -> File(appCtx.filesDir, "bookmark_badge_resources")
+        relative.startsWith("assets/highlightResources/") -> File(appCtx.filesDir, "highlight_resources")
+        else -> null
     }
 
     /** 计算资源摘要，恢复前与 manifest 对比，避免损坏文件进入应用配置。 */

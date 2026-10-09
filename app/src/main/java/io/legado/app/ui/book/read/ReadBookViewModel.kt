@@ -1756,6 +1756,9 @@ class ReadBookViewModel(
         }
         viewModelScope.launch {
             ReadConfigUpdateBus.events.collect { actions ->
+                if (ConfigUpdateAction.RefreshReadMenuButtons in actions) {
+                    buttonConfigDelegate.refresh()
+                }
                 _uiState.update {
                     it.copy(
                         styleConfig = buildStyleConfig(),

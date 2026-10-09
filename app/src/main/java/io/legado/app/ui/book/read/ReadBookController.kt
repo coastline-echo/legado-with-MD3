@@ -1815,6 +1815,7 @@ class ReadBookController(
                         ConfigUpdateAction.SubmitRenderTask,
                         ConfigUpdateAction.UpdatePageAnim -> Unit
                         ConfigUpdateAction.RefreshTextSelectionMenu -> refreshActionMenuItems()
+                        ConfigUpdateAction.RefreshReadMenuButtons -> Unit
                     }
                 }
                 if (refreshInlineImages) refreshInlineImagesThenReload()
@@ -2559,6 +2560,7 @@ private fun ConfigUpdateAction.invalidatesDirectReaderPages(): Boolean = when (t
     ConfigUpdateAction.UpdatePageSlopSquare,
     ConfigUpdateAction.RefreshInlineImages,
     ConfigUpdateAction.RefreshTextSelectionMenu,
+    ConfigUpdateAction.RefreshReadMenuButtons,
     ConfigUpdateAction.RebuildWholeBookPageIndex,
     ConfigUpdateAction.UpdateWholeBookPageDemand,
     ConfigUpdateAction.SubmitRenderTask,

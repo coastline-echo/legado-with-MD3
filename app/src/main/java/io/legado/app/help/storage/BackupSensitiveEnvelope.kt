@@ -1,6 +1,6 @@
 package io.legado.app.help.storage
 
-/** 敏感备份载荷的统一标记；无标记内容保留旧版 AES 兼容读取。 */
+/** 当前分支 v1 敏感载荷标记；无标记内容仅为 main 既有备份的 AES 兼容读取路径。 */
 object BackupSensitiveEnvelope {
     private const val PREFIX = "LEGADO_SENSITIVE_V1:"
 
