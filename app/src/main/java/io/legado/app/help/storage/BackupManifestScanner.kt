@@ -1,5 +1,8 @@
 package io.legado.app.help.storage
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import io.legado.app.utils.GSON
 import java.io.File
 import java.security.MessageDigest
@@ -20,7 +23,45 @@ object BackupManifestScanner {
 
     /** 当前分支清单固定使用 v1 结构；main 无清单时由上层走旧格式路径。 */
     private fun parseManifest(json: String): BackupManifest {
-        return GSON.fromJson(json, BackupManifest::class.java)
+        val source = JsonParser.parseString(json).asJsonObject
+        // Gson 通过反射构造 Kotlin 数据类时不会应用非空默认值；调试期清单或
+        // 手工生成的清单可能显式写出 technical:null。先移除空字段，让模型的
+        // BackupManifestTechnical 默认值生效，避免恢复结果阶段触发 NPE。
+        if (!source.has("technical") || source.get("technical")?.isJsonNull == true) {
+            source.remove("technical")
+        }
+        source.getAsJsonObject("备份信息")?.let { info ->
+            info.get("清单格式版本")?.let { source.add("formatVersion", it) }
+            info.get("生成应用版本")?.let { source.add("appVersion", it) }
+        }
+        val backed = source.getAsJsonObject("备份内容")
+        val notBacked = source.getAsJsonObject("未备份内容")
+        if (backed != null || notBacked != null) {
+            fun mergeCategories(): JsonArray = JsonArray().apply {
+                backed?.getAsJsonArray("类别")?.forEach { add(toInternalItem(it.asJsonObject)) }
+                notBacked?.getAsJsonArray("类别")?.forEach { add(toInternalItem(it.asJsonObject)) }
+            }
+            fun mergeConfigItems(): JsonArray = JsonArray().apply {
+                backed?.getAsJsonArray("配置项")?.forEach {
+                    add(toInternalItem(it.asJsonObject))
+                }
+                notBacked?.getAsJsonArray("配置项")?.forEach {
+                    add(toInternalItem(it.asJsonObject))
+                }
+            }
+            source.add("categories", mergeCategories())
+            source.add("configItems", mergeConfigItems())
+            source.add("sensitiveCategories", source.getAsJsonArray("敏感信息")?.let { values ->
+                JsonArray().apply { values.forEach { add(toInternalItem(it.asJsonObject)) } }
+            } ?: JsonArray())
+        }
+        return GSON.fromJson(source, BackupManifest::class.java)
+    }
+
+    private fun toInternalItem(source: JsonObject): JsonObject = JsonObject().apply {
+        addProperty("name", source.get("名称")?.asString ?: source.get("name")?.asString.orEmpty())
+        addProperty("status", source.get("状态")?.asString ?: source.get("status")?.asString.orEmpty())
+        source.get("原因")?.asString?.takeIf { it.isNotBlank() }?.let { addProperty("detail", it) }
     }
 
     fun scanZip(input: InputStream): BackupScanResult {
@@ -89,8 +130,16 @@ object BackupManifestScanner {
         if (parsedManifest.formatVersion != BACKUP_MANIFEST_FORMAT_VERSION) {
             warnings += "manifest.json 格式版本不受支持：${parsedManifest.formatVersion}"
         }
-        if (parsedManifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
-        if (parsedManifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
+        if (integrity != null) {
+            if (integrity.integrityVersion != BACKUP_INTEGRITY_FORMAT_VERSION) {
+                warnings += "integrity.json 格式版本不受支持：${integrity.integrityVersion}"
+            }
+            integrity.manifestSha256.takeIf { it.isNotBlank() }?.let { expected ->
+                entries["manifest.json"]?.second?.takeIf { it != expected }?.let {
+                    warnings += "manifest.json 校验失败"
+                }
+            }
+        }
         if (integrity == null && parsedManifest.technical.files.isEmpty() && parsedManifest.technical.resources.isEmpty()) {
             warnings += "integrity.json 缺失，无法校验备份文件完整性"
         }
@@ -145,8 +194,16 @@ object BackupManifestScanner {
         if (mergedManifest.formatVersion != BACKUP_MANIFEST_FORMAT_VERSION) {
             warnings += "manifest.json 格式版本不受支持：${mergedManifest.formatVersion}"
         }
-        if (mergedManifest.createdAt <= 0L) warnings += "manifest.json 创建时间无效"
-        if (mergedManifest.appVersion.isBlank()) warnings += "manifest.json 缺少应用版本"
+        if (integrity != null) {
+            if (integrity.integrityVersion != BACKUP_INTEGRITY_FORMAT_VERSION) {
+                warnings += "integrity.json 格式版本不受支持：${integrity.integrityVersion}"
+            }
+            integrity.manifestSha256.takeIf { it.isNotBlank() }?.let { expected ->
+                if (File(root, "manifest.json").sha256() != expected) {
+                    warnings += "manifest.json 校验失败"
+                }
+            }
+        }
         if (integrity == null && mergedManifest.technical.files.isEmpty() && mergedManifest.technical.resources.isEmpty()) {
             warnings += "integrity.json 缺失，无法校验备份文件完整性"
         }

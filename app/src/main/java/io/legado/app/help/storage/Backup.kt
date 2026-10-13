@@ -494,12 +494,15 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         val ignoredManifestCategories = BackupConfig.backupIgnoreConfig
             .filterValues { it }
             .keys
+        val manifestCounts = manifestCategoryCounts(filesForManifest)
         val categoryStatus = BackupRestoreCategoryCatalog.allCategories.associateWith { category ->
             when {
-                category == "resources" && resourceFiles.isNotEmpty() -> "已写入"
-                category in manifestCategories -> "已写入"
                 category in ignoredManifestCategories -> "已忽略"
-                else -> "未写入"
+                category == "resources" && resourceFiles.isNotEmpty() -> "已备份"
+                category == "settings" && writtenConfigKeys.isNotEmpty() -> "已备份"
+                category in manifestCategories && (manifestCounts[category] ?: 0) > 0 -> "已备份"
+                category in manifestCategories -> "无内容"
+                else -> "未备份"
             }
         }
         val categoryLabels = mapOf(
@@ -510,13 +513,14 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
             "httpTTS" to "HTTP TTS", "keyboardAssists" to "键盘辅助", "dictRule" to "字典规则",
             "homepageModules" to "首页模块", "homepageCustomSets" to "首页自定义布局",
             "highlightRule" to "高亮规则", "highlightTagRule" to "高亮标签规则", "tagGroupRule" to "标签分组",
-            "settings" to "应用设置", "readConfig" to "阅读器配置", "themeConfig" to "主题与外观",
+            "settings" to "应用设置", "readConfig" to "阅读内容设置", "themeConfig" to "主题与外观",
             "coverConfig" to "封面配置", "directLinkUploadRule" to "直链上传", "resources" to "背景资源",
-            "readSettings" to "完整阅读器设置",
+            "readSettings" to "阅读界面设置",
         )
         val categoryStatusDetails = categoryStatus.mapValues { (category, status) ->
             when (status) {
-                "已写入" -> ""
+                "已备份" -> ""
+                "无内容" -> "本次没有可写入内容"
                 "已忽略" -> "已按备份忽略设置跳过"
                 else -> when {
                     category == "bookSource" && sensitiveEncryptionFailures.any {
@@ -596,7 +600,6 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         // 未设置的键没有进入持久化快照，是正常状态；仍在清单中说明，但不计为备份警告。
         warningCount += configIntegrity.unsupported.size +
             configIntegrity.failed.size + manifestWarnings.size
-        val manifestCounts = manifestCategoryCounts(filesForManifest)
         val manifestFileNamesByCategory = manifestCategoryByFile.entries
             .groupBy({ it.value }, { it.key.name })
         val manifestCategoryOrder = (
@@ -610,7 +613,7 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
                 BackupManifestCategory(
                     id = category,
                     name = categoryLabels[category] ?: appCtx.getString(R.string.restore_category_other),
-                    status = categoryStatus[category] ?: "已写入",
+                    status = categoryStatus[category] ?: "未备份",
                     detail = categoryStatusDetails[category].orEmpty(),
                     count = when (category) {
                         "settings" -> configIntegrity.written.size
@@ -648,7 +651,9 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
                 if (BackupConfig.ignoreThemeConfig) add("themeConfig")
                 if (BackupConfig.ignoreCoverConfig) add("coverConfig")
             },
-            configItems = (configMap.keys + configIntegrity.notSet).map { key ->
+            configItems = (configMap.keys + configIntegrity.notSet)
+                .filter { it != PreferKey.backupPath }
+                .map { key ->
                 BackupManifestConfigItem(
                     key = key,
                     name = configKeyLabel(key),
@@ -704,23 +709,67 @@ sensitiveItems = buildSet {
             },
             weakProtection = BackupPasswordPolicyResolver.resolve(LocalConfig.password).weakProtection,
         )
-        val readableManifest = GSON.toJsonTree(manifest).asJsonObject.apply {
-            remove("technical")
-            getAsJsonArray("categories")?.forEach { category ->
-                category.asJsonObject.apply {
-                    remove("id")
-                    remove("count")
-                    remove("files")
+        val readableManifest = com.google.gson.JsonObject().apply {
+            add("备份信息", com.google.gson.JsonObject().apply {
+                addProperty("清单格式版本", manifest.formatVersion)
+                addProperty("生成应用版本", manifest.appVersion)
+                addProperty(
+                    "备份时间",
+                    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(manifest.createdAt)),
+                )
+            })
+            fun readableItem(name: String, status: String, detail: String?): com.google.gson.JsonObject =
+                com.google.gson.JsonObject().apply {
+                    addProperty("名称", name)
+                    addProperty("状态", status)
+                    detail?.takeIf { it.isNotBlank() }?.let {
+                        addProperty("原因", it)
+                    }
+                }
+            fun readableItems(source: Collection<BackupManifestSensitiveCategory>): com.google.gson.JsonArray =
+                com.google.gson.JsonArray().apply {
+                    source.forEach { add(readableItem(it.name, it.status, null)) }
+                }
+            fun readableConfigItems(source: Collection<BackupManifestConfigItem>): com.google.gson.JsonArray =
+                com.google.gson.JsonArray().apply {
+                    source.groupingBy { it.name to it.status }.eachCount()
+                        .entries.sortedWith(compareBy({ it.key.second }, { it.key.first }))
+                        .forEach { (key, count) ->
+                            val (name, status) = key
+                            add(readableItem(
+                                if (count > 1) "$name（${count}项）" else name,
+                                status,
+                                null,
+                            ))
+                        }
+                }
+            val backedCategories = com.google.gson.JsonArray()
+            val notBackedCategories = com.google.gson.JsonArray()
+            manifest.categories.forEach { category ->
+                val item = readableItem(category.name, category.status, category.detail)
+                if (category.status == "已备份") {
+                    backedCategories.add(item)
+                } else {
+                    notBackedCategories.add(item)
                 }
             }
-            getAsJsonArray("sensitiveCategories")?.forEach { category ->
-                category.asJsonObject.remove("id")
-            }
+            val backedConfig = readableConfigItems(manifest.configItems.filter { it.status == "已写入" })
+            val notBackedConfig = readableConfigItems(manifest.configItems.filter { it.status != "已写入" })
+            add("备份内容", com.google.gson.JsonObject().apply {
+                add("类别", backedCategories)
+                add("配置项", backedConfig)
+            })
+            add("未备份内容", com.google.gson.JsonObject().apply {
+                add("类别", notBackedCategories)
+                add("配置项", notBackedConfig)
+            })
+            add("敏感信息", readableItems(manifest.sensitiveCategories))
         }
-        FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
-            .writeText(GSON.toJson(readableManifest))
+        val manifestFile = FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
+        manifestFile.writeText(GSON.toJson(readableManifest))
+        val integrity = manifest.technical.copy(manifestSha256 = manifestFile.sha256())
         FileUtils.createFileIfNotExist(backupPath + File.separator + "integrity.json")
-            .writeText(GSON.toJson(manifest.technical))
+            .writeText(GSON.toJson(integrity))
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.GENERATE_MANIFEST, filesForManifest.size, filesForManifest.size))
 
         currentCoroutineContext().ensureActive()
@@ -884,6 +933,27 @@ webDavUploadAttempted = webDavUploadAttempted,
         key == PreferKey.textSelectMenuConfig -> "文本选择菜单配置"
         key == PreferKey.readMenuIconShowText -> "阅读菜单显示图标文字"
         key == PreferKey.readMenuIconStyle -> "阅读菜单图标样式"
+        key == "backgroundImage" -> "阅读背景图片"
+        key == "bottomBarButtons" -> "阅读底栏按钮"
+        key == "readBarStyle" -> "阅读栏样式"
+        key == "readMenuBgColorNight" -> "阅读菜单夜间背景色"
+        key == "readMenuBlurColor" -> "阅读菜单模糊颜色"
+        key == "readMenuCustomIcons" -> "阅读菜单自定义图标"
+        key == "readMenuIconItemsPerRow" -> "阅读菜单每行图标数"
+        key == "readMenuIconRowCount" -> "阅读菜单图标行数"
+        key == "readMenuTextColor" -> "阅读菜单文字颜色"
+        key == "readMenuTopBarBlurMode" -> "阅读顶部栏模糊模式"
+        key == "readMenuTopBarBlurStyle" -> "阅读顶部栏模糊样式"
+        key == "readMenuTopBarMergeButtons" -> "阅读顶部栏合并按钮"
+        key == "readMenuTopBarTitleCapsule" -> "阅读顶部栏标题胶囊"
+        key == "showBookshelfFastScroller" -> "显示书架快速滚动条"
+        key == "showLastUpdateTime" -> "显示最后更新时间"
+        key == "showTitleBarIcons" -> "显示标题栏图标"
+        key == "showWaitUpCount" -> "显示待更新数量"
+        key == "titleBarCompact" -> "标题栏紧凑模式"
+        key == "titleBarIconStyle" -> "标题栏图标样式"
+        key == "titleBarMode" -> "标题栏模式"
+        key == "topBarButtonStyle" -> "顶栏按钮样式"
         key == "bookshelfLayout" -> "书架布局"
         key == "bookshelfSort" -> "书架排序方式"
         key == "comicStyleSelect" -> "漫画阅读样式"

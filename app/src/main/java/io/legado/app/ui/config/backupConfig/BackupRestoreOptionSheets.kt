@@ -67,24 +67,22 @@ fun RestoreOptionSheet(
     onRestoreFromNetwork: (RestoreMode) -> Unit,
 ) {
     var source by androidx.compose.runtime.remember { mutableStateOf<RestoreSource?>(null) }
-    var showAdvanced by androidx.compose.runtime.remember { mutableStateOf(false) }
     OptionSheet(
         show = show,
-        onDismissRequest = { source = null; showAdvanced = false; onDismissRequest() },
+        onDismissRequest = { source = null; onDismissRequest() },
         modifier = Modifier.heightIn(min = 220.dp, max = 420.dp),
         title = stringResource(
             when {
                 source == null -> R.string.restore_choose_source
-                showAdvanced -> R.string.restore_advanced_actions
                 else -> R.string.restore_choose_strategy
             }
         ),
     ) {
         AnimatedContent(
-            targetState = source to showAdvanced,
+            targetState = source,
             label = "restore-options",
             modifier = Modifier.fillMaxWidth(),
-        ) { (selectedSource, advanced) ->
+        ) { selectedSource ->
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -94,43 +92,29 @@ fun RestoreOptionSheet(
                 if (selectedSource == null) {
                     OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.backup_source_local),
                         description = stringResource(R.string.restore_source_local_desc)) {
-                        showAdvanced = false
                         source = RestoreSource.LOCAL
                     }
                     OptionCard(Icons.Default.Cloud, stringResource(R.string.restore_source_webdav),
                         description = stringResource(R.string.restore_source_webdav_desc)) {
-                        showAdvanced = false
                         source = RestoreSource.WEBDAV
                     }
                 } else {
                     fun restore(mode: RestoreMode) {
                         val action = if (selectedSource == RestoreSource.LOCAL) onRestoreFromLocal else onRestoreFromNetwork
                         source = null
-                        showAdvanced = false
                         action(mode)
                     }
-                    if (advanced) {
-                        OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_back_to_strategies)) {
-                            showAdvanced = false
-                        }
-                        OptionCard(Icons.Default.Warning, stringResource(R.string.restore_strategy_replace),
-                            description = stringResource(R.string.restore_strategy_replace_desc)) {
-                            restore(RestoreMode.CLEAR_THEN_RESTORE)
-                        }
-                    } else {
-                        OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_merge),
-                            description = stringResource(R.string.restore_strategy_merge_desc)) {
-                            restore(RestoreMode.KEEP_APPLICATION)
-                        }
-                        OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_by_category),
-                            description = stringResource(R.string.restore_strategy_by_category_desc)) {
-                            restore(RestoreMode.BY_CATEGORY)
-                        }
-                        // 删除数据的方式放入独立的高级层级，避免与普通恢复误触。
-                        OptionCard(Icons.Default.Warning, stringResource(R.string.restore_advanced_actions),
-                            description = stringResource(R.string.restore_advanced_actions_desc)) {
-                            showAdvanced = true
-                        }
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_merge),
+                        description = stringResource(R.string.restore_strategy_merge_desc)) {
+                        restore(RestoreMode.KEEP_APPLICATION)
+                    }
+                    OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_by_category),
+                        description = stringResource(R.string.restore_strategy_by_category_desc)) {
+                        restore(RestoreMode.BY_CATEGORY)
+                    }
+                    OptionCard(Icons.Default.Warning, stringResource(R.string.restore_strategy_replace),
+                        description = stringResource(R.string.restore_strategy_replace_desc)) {
+                        restore(RestoreMode.CLEAR_THEN_RESTORE)
                     }
                 }
             }

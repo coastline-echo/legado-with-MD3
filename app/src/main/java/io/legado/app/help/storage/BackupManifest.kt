@@ -6,6 +6,7 @@ import java.security.MessageDigest
 
 /** 当前备份 ZIP 清单的格式版本。发生不兼容的清单结构变化时递增。 */
 const val BACKUP_MANIFEST_FORMAT_VERSION = 1
+const val BACKUP_INTEGRITY_FORMAT_VERSION = 1
 
 /** 当前分支备份 ZIP 的唯一结构清单；清单不保存敏感字段原文。 */
 data class BackupManifest(
@@ -31,6 +32,10 @@ val BackupManifest.warnings: List<String> get() = technical.warnings
 
 /** 同一清单中的技术校验与恢复辅助数据，与用户可读项目分开存放。 */
 data class BackupManifestTechnical(
+    /** 校验文件自身的结构版本，与用户清单格式版本独立维护。 */
+    val integrityVersion: Int = 1,
+    /** 用户清单的摘要，用于发现清单在传输或解压过程中被修改。 */
+    val manifestSha256: String = "",
     val configItems: List<BackupManifestConfigItem> = emptyList(),
     val categoryLabels: Map<String, String> = emptyMap(),
     val sensitiveCategoryLabels: Map<String, String> = emptyMap(),

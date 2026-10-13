@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,11 +40,12 @@ internal fun BackupManifestScreen(
     BackHandler(onBack = onBackClick)
     var showAllCategories by remember { mutableStateOf(false) }
     var showNotSetConfig by remember { mutableStateOf(false) }
+    var showEmptySensitive by remember { mutableStateOf(false) }
     var onlyIssues by remember { mutableStateOf(false) }
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
-    val issueStatuses = setOf("不支持", "写入失败")
+    val issueStatuses = setOf("不支持", "写入失败", "未备份")
     val emptyCategories = result.backupEmptyCategories + result.backupCategoryStatus
-        .filterValues { it == "未写入" }.keys
+        .filterValues { it == "无内容" }.keys
     val allCategories = result.backupCategoryStatus.entries.toList()
     val categories = allCategories.filter { (category, status) ->
         if (onlyIssues) status in issueStatuses else category !in emptyCategories
@@ -72,6 +75,9 @@ internal fun BackupManifestScreen(
     val hiddenSensitiveCount = if (onlyIssues) 0 else {
         (result.backupSensitiveStatus.size - sensitiveStatuses.size).coerceAtLeast(0)
     }
+    val hiddenSensitive = if (onlyIssues) emptyList() else {
+        result.backupSensitiveStatus.entries.filterNot { it in sensitiveStatuses }
+    }
 
     AppScaffold(
         topBar = {
@@ -86,7 +92,7 @@ internal fun BackupManifestScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = adaptiveContentPadding(
                 top = paddingValues.calculateTopPadding(),
-                bottom = paddingValues.calculateBottomPadding(),
+                bottom = paddingValues.calculateBottomPadding() + 32.dp,
             ),
         ) {
             item {
@@ -156,21 +162,10 @@ internal fun BackupManifestScreen(
                     if (count > 0) add(stringResource(R.string.backup_manifest_category_count, count))
                     if (detail.isNotBlank()) add(detail)
                 }
-                val detailText = if (details.isNotEmpty()) {
-                    stringResource(
-                        R.string.backup_manifest_category_reason,
-                        details.joinToString(stringResource(R.string.backup_config_summary_separator)),
-                    )
-                } else ""
-                Text(
-                    text = stringResource(
-                        R.string.backup_manifest_category_item,
-                        name,
-                        displayStatus,
-                        detailText,
-                    ),
-                    color = LegadoTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                ManifestStatusRow(
+                    name = name,
+                    status = displayStatus,
+                    detail = details.joinToString(stringResource(R.string.backup_config_summary_separator)),
                 )
             }
             if (!onlyIssues && emptyCategories.isNotEmpty()) {
@@ -201,15 +196,11 @@ internal fun BackupManifestScreen(
                 val name = result.backupCategoryLabels[category].orEmpty().ifBlank {
                     stringResource(R.string.restore_category_other)
                 }
-                Text(
-                    text = stringResource(
-                        R.string.backup_manifest_category_item,
-                        name,
-                        stringResource(R.string.backup_manifest_empty_category),
-                        "",
-                    ),
-                    color = LegadoTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                ManifestStatusRow(
+                    name = name,
+                    status = stringResource(R.string.backup_manifest_empty_category),
+                    detail = "",
+                    muted = true,
                 )
             }
             if (visibleConfig.isNotEmpty()) {
@@ -225,23 +216,19 @@ internal fun BackupManifestScreen(
                     )
                 }
                 items(knownConfig, key = { "config:${it.key}" }) { (key, status) ->
-                    Text(
-                        text = stringResource(
-                            R.string.backup_label_value,
-                            result.backupConfigKeyLabels.getValue(key),
-                            status,
-                        ),
-                        color = LegadoTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ManifestStatusRow(
+                        name = result.backupConfigKeyLabels.getValue(key),
+                        status = status,
+                        detail = "",
                     )
                 }
                 otherConfig.forEach { (status, entries) ->
                     item(key = "other:$status") {
-                        Text(
-                            text = stringResource(R.string.backup_manifest_other_config_count, status, entries.size),
-                            color = LegadoTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        )
+                    ManifestStatusRow(
+                        name = stringResource(R.string.backup_config_detail_other),
+                        status = status,
+                        detail = stringResource(R.string.backup_manifest_other_config_count, "", entries.size),
+                    )
                     }
                 }
             }
@@ -309,22 +296,70 @@ internal fun BackupManifestScreen(
                     } else {
                         sensitiveCategoryTitle(category)
                     }
-                    Text(
-                        text = stringResource(R.string.backup_label_value, name, status),
-                        color = LegadoTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
+                    ManifestStatusRow(name = name, status = status, detail = "")
                 }
             }
             if (!onlyIssues && hiddenSensitiveCount > 0) {
                 item {
-                    Text(
-                        text = stringResource(R.string.backup_sensitive_empty_summary, hiddenSensitiveCount),
-                        color = LegadoTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    CollapsibleHeader(
+                        isCollapsed = !showEmptySensitive,
+                        title = stringResource(
+                            if (showEmptySensitive) R.string.backup_sensitive_empty_collapse
+                            else R.string.backup_sensitive_empty_summary,
+                            hiddenSensitiveCount,
+                        ),
+                        onToggle = { showEmptySensitive = !showEmptySensitive },
                     )
                 }
             }
+            if (!onlyIssues && showEmptySensitive) {
+                items(hiddenSensitive, key = { "sensitive-empty:${it.key}" }) { (id, status) ->
+                    val category = BackupSensitiveCategory.entries.firstOrNull { it.name == id }
+                    ManifestStatusRow(
+                        name = category?.let { sensitiveCategoryTitle(it) }
+                            ?: stringResource(R.string.backup_sensitive_other),
+                        status = status,
+                        detail = "",
+                        muted = true,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ManifestStatusRow(
+    name: String,
+    status: String,
+    detail: String,
+    muted: Boolean = false,
+) {
+    val contentColor = if (muted) {
+        LegadoTheme.colorScheme.onSurfaceVariant
+    } else {
+        LegadoTheme.colorScheme.onSurface
+    }
+    val statusColor = when (status) {
+        "已备份", "已写入", "已加密写入" -> LegadoTheme.colorScheme.primary
+        "未备份", "写入失败", "不支持" -> LegadoTheme.colorScheme.error
+        else -> LegadoTheme.colorScheme.onSurfaceVariant
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = name, color = contentColor, modifier = Modifier.weight(0.62f))
+            Text(text = status, color = statusColor, modifier = Modifier.weight(0.38f))
+        }
+        if (detail.isNotBlank()) {
+            Text(
+                text = detail,
+                color = LegadoTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }

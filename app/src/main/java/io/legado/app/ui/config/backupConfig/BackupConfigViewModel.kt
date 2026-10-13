@@ -152,25 +152,21 @@ class BackupConfigViewModel(
                 }.toImmutableList())
             }
             BackupConfigIntent.SaveSensitiveItems -> saveSensitiveItems()
-            BackupConfigIntent.ToggleConfigReportDetails -> _uiState.update { state ->
-                val dialog = state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport
-                    ?: return@update state
-                state.copy(activeDialog = dialog.copy(showDetails = !dialog.showDetails))
-            }
             BackupConfigIntent.OpenBackupManifest -> _uiState.update { state ->
                 if (state.activeDialog !is BackupConfigDialog.ConfigIntegrityReport) state
                 else state.copy(showBackupManifest = true)
             }
             BackupConfigIntent.CloseBackupManifest ->
                 _uiState.update { it.copy(showBackupManifest = false) }
-            BackupConfigIntent.ToggleAllRestoreCategories -> _uiState.update { state ->
-                val dialog = state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport
-                    ?: return@update state
-                if (dialog.type != BackupConfigReportType.RESTORE) return@update state
-                state.copy(activeDialog = dialog.copy(showAllCategories = !dialog.showAllCategories))
+            BackupConfigIntent.OpenRestoreDetails -> _uiState.update { state ->
+                if (state.activeDialog !is BackupConfigDialog.ConfigIntegrityReport ||
+                    state.activeDialog.type != BackupConfigReportType.RESTORE
+                ) state else state.copy(showRestoreDetails = true)
             }
+            BackupConfigIntent.CloseRestoreDetails ->
+                _uiState.update { it.copy(showRestoreDetails = false) }
             BackupConfigIntent.DismissDialog -> _uiState.update {
-                it.copy(activeDialog = null, showBackupManifest = false)
+                it.copy(activeDialog = null, showBackupManifest = false, showRestoreDetails = false)
             }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
@@ -456,7 +452,9 @@ class BackupConfigViewModel(
                                 uri = uri,
                                 preview = preview,
                                 mode = selectedRestoreMode,
-                                selectedCategories = preview.categories.keys,
+                                selectedCategories = preview.categories
+                                    .filterValues { selectedRestoreMode != RestoreMode.CLEAR_THEN_RESTORE || it > 0 }
+                                    .keys,
                                 categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
                                 localPassword = "",
                             )
@@ -558,7 +556,9 @@ class BackupConfigViewModel(
                                 preview = preview,
                                 mode = selectedRestoreMode,
                                 networkName = name,
-                                selectedCategories = preview.categories.keys,
+                                selectedCategories = preview.categories
+                                    .filterValues { selectedRestoreMode != RestoreMode.CLEAR_THEN_RESTORE || it > 0 }
+                                    .keys,
                                 categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
                                 localPassword = "",
                             )

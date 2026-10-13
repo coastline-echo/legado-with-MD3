@@ -46,6 +46,22 @@ class BackupManifestScannerTest {
     }
 
     @Test
+    fun `null technical field uses the default technical section`() {
+        val root = Files.createTempDirectory("null-technical").toFile()
+        try {
+            root.resolve("manifest.json").writeText(
+                """{"formatVersion":1,"appVersion":"test","createdAt":1,"technical":null}"""
+            )
+            val result = BackupManifestScanner.scan(root)
+            assertFalse(result.legacyFormat)
+            assertTrue(result.manifest?.technical != null)
+            assertTrue(result.warnings.any { it.contains("integrity.json") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `legacy directory without manifest is accepted`() {
         val root = Files.createTempDirectory("legacy-backup").toFile()
         try {

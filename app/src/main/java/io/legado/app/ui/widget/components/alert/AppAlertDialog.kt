@@ -143,7 +143,7 @@ fun AppAlertDialog(
                                 Modifier.height(bodyHeight ?: contentMaxHeight)
                             } else {
                                 Modifier
-                            }).verticalScroll(rememberScrollState())
+                            }).fillMaxWidth().verticalScroll(rememberScrollState())
                         ) {
                             if (text != null) {
                                 SelectionContainer {

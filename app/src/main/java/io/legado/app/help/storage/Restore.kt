@@ -522,8 +522,16 @@ private suspend fun restore(
             }
             .filter { it.first }
             .mapTo(hashSetOf()) { it.second }
+        // 按类别/清空恢复只统计用户勾选且实际可执行的类别；
+        // 之前把未勾选类别的 planner 结果也带进 categoryStats，导致详情页
+        // 显示“已恢复”类别和数量高于实际执行内容。
         val progressCategories = categoryPlans.values
-            .filter { it.mode != null && !it.skippedByIgnore }
+            .filter {
+                it.mode != null &&
+                    !it.skippedByIgnore &&
+                    (mode != RestoreMode.BY_CATEGORY && mode != RestoreMode.CLEAR_THEN_RESTORE ||
+                        it.category in selectedCategories)
+            }
             .map { it.category }
 .toSet()
         val reportedCategories = hashSetOf<String>()
@@ -1125,6 +1133,7 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
                         aes,
                         if (useBackup("settings")) RestoreMode.USE_BACKUP else RestoreMode.KEEP_APPLICATION,
                         allowLegacyPlaintextFallback,
+                        clearMissing = categoryPlans["settings"]?.mode == RestoreMode.CLEAR_THEN_RESTORE,
                     )
                     decryptionFailedConfigKeys += decryptionFailures
                     if (decryptionFailures.isNotEmpty()) {
@@ -1184,7 +1193,9 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
             AppLog.put("恢复后应用主题/语言状态失败\n${it.localizedMessage}", it)
         }
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.COMPLETE))
-        val categoryStats = categoryPlans.values.associate { plan ->
+        val categoryStats = categoryPlans.values
+            .filter { it.category in progressCategories }
+            .associate { plan ->
             plan.category to plan.toStats(failedCategoryCounts[plan.category] ?: 0)
         }
 BackupRestoreResultBus.emit(
@@ -1590,6 +1601,7 @@ private fun restorePlannerCategories(
         aes: BackupAES,
         mode: RestoreMode,
         allowLegacyPlaintextFallback: Boolean,
+        clearMissing: Boolean = false,
     ): Set<String> {
         val normalization = normalizeConfigMapWithReport(
             map = map,
@@ -1613,11 +1625,25 @@ private fun restorePlannerCategories(
         }
         val finalMap = normalization.values
         // 经快照层批量恢复：立即对读侧生效（onRestoreFinish 的读取不再依赖回灌时机），单次原子 edit 落盘
-        val valuesToApply = if (mode == RestoreMode.USE_BACKUP) {
-            finalMap
-        } else {
-            val existingKeys = AppConfigStore.preferences.asMap().keys.map { it.name }.toSet()
-            finalMap.filterKeys { it !in existingKeys }
+        val existingKeys = AppConfigStore.preferences.asMap().keys.map { it.name }.toSet()
+        val valuesToApply = when {
+            clearMissing -> {
+                // 清空配置类别时，备份中不存在的可恢复键也必须移除，
+                // 否则本机后来改成的值会在恢复后继续生效（例如书架布局）。
+                val removedKeys = existingKeys
+                    .asSequence()
+                    // 备份端明确忽略的键不能因为清空恢复而被删除；
+                    // 恢复端本身忽略的键同样保留在本机。
+                    .filter {
+                        it !in finalMap &&
+                            BackupConfig.keyIsNotIgnore(it, isBackup = true) &&
+                            BackupConfig.keyIsNotIgnore(it)
+                    }
+                    .associateWith { null }
+                removedKeys + finalMap
+            }
+            mode == RestoreMode.USE_BACKUP -> finalMap
+            else -> finalMap.filterKeys { it !in existingKeys }
         }
         // 使用带确认的批量写入，确保 Gateway/底栏读取到恢复后的完整快照。
         AppConfigStore.putAllAndAwait(valuesToApply)

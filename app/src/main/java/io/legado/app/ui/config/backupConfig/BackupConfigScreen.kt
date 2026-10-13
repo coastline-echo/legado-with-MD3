@@ -60,7 +60,6 @@ import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
-import io.legado.app.ui.widget.components.CollapsibleHeader
 import io.legado.app.ui.widget.components.SplicedColumnGroup
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.series.MediumTonalButton
@@ -203,6 +202,23 @@ BackupConfigEffect.LaunchImportOldDataFilePicker ->
         BackupManifestScreen(
             result = manifestReport,
             onBackClick = { viewModel.onIntent(BackupConfigIntent.CloseBackupManifest) },
+        )
+    } else if (state.showRestoreDetails && manifestReport != null) {
+        RestoreResultScreen(
+            result = manifestReport,
+            sourceLabel = (state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport)?.source?.let {
+                stringResource(
+                    R.string.restore_result_source,
+                    stringResource(
+                        if (it == BackupConfigResultSource.WEBDAV) {
+                            R.string.restore_result_source_webdav
+                        } else {
+                            R.string.backup_source_local
+                        },
+                    ),
+                )
+            },
+            onBackClick = { viewModel.onIntent(BackupConfigIntent.CloseRestoreDetails) },
         )
     } else {
         BackupConfigScreen(
@@ -729,11 +745,11 @@ private fun BackupConfigDialogs(
         result.localBackupCreated || (result.webDavUploadAttempted && !result.webDavUploadFailed)
     } == true
     val hasBackupManifest = integrity?.result?.let { result ->
-        (integrity?.type == BackupConfigReportType.RESTORE || backupTargetSucceeded) &&
+        (integrity?.type == BackupConfigReportType.BACKUP && backupTargetSucceeded) &&
             (result.backupCategoryStatus.isNotEmpty() || result.backupConfigKeyStatus.isNotEmpty())
     } == true
     val hasRestoreDetails = integrity?.takeIf { it.type == BackupConfigReportType.RESTORE }
-        ?.let { detailCountForRestore(it.result) > 0 } == true
+        ?.result?.categoryStats?.isNotEmpty() == true
     AppAlertDialog(
         // 高度由 AppAlertDialog 按主题分别应用：MD3 限制弹窗，Miuix 限制正文滚动区。
         show = integrity != null,
@@ -780,28 +796,6 @@ private fun BackupConfigDialogs(
         }.orEmpty(),
         content = {
             integrity?.let { report ->
-                val visibleCategories = if (report.type == BackupConfigReportType.RESTORE) {
-                    report.result.categoryStats.entries
-                        .filter { (category, stats) ->
-                            category !in report.result.failedCategories &&
-                                stats.inserted + stats.updated + stats.deleted > 0
-                        }
-                        .sortedBy { it.key }
-                } else emptyList()
-                val unchangedCategoryCount = if (report.type == BackupConfigReportType.RESTORE) {
-                    report.result.categoryStats.count { (category, stats) ->
-                        category !in report.result.failedCategories &&
-                            stats.inserted + stats.updated + stats.deleted == 0
-                    }
-                } else 0
-                val unchangedCategories = if (report.type == BackupConfigReportType.RESTORE) {
-                    report.result.categoryStats.entries
-                        .filter { (category, stats) ->
-                            category !in report.result.failedCategories &&
-                                stats.inserted + stats.updated + stats.deleted == 0
-                        }
-                        .sortedBy { it.key }
-                } else emptyList()
                 report.message?.takeIf { it.isNotBlank() }?.let { message ->
                     Text(
                         text = readableRestoreFailure(message),
@@ -835,8 +829,10 @@ private fun BackupConfigDialogs(
                         color = LegadoTheme.colorScheme.error,
                     )
                 }
-                if (report.result.localBackupAttempted || report.result.webDavUploadAttempted ||
+                if (report.type == BackupConfigReportType.BACKUP &&
+                    (report.result.localBackupAttempted || report.result.webDavUploadAttempted ||
                     report.result.webDavUploadFailed
+                    )
                 ) {
                     Text(
                         text = stringResource(R.string.backup_result_targets_title),
@@ -844,7 +840,7 @@ private fun BackupConfigDialogs(
                         color = LegadoTheme.colorScheme.primary,
                     )
                 }
-                if (report.result.localBackupAttempted) {
+                if (report.type == BackupConfigReportType.BACKUP && report.result.localBackupAttempted) {
                     Text(
                         text = stringResource(
                             if (report.result.localBackupCreated) R.string.backup_local_result_success
@@ -853,20 +849,15 @@ private fun BackupConfigDialogs(
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
-                if (report.result.webDavUploadAttempted || report.result.webDavUploadFailed) {
+                if (report.type == BackupConfigReportType.BACKUP &&
+                    (report.result.webDavUploadAttempted || report.result.webDavUploadFailed)
+                ) {
                     Text(
                         text = stringResource(
                             if (report.result.webDavUploadFailed) R.string.backup_webdav_result_failed
                             else R.string.backup_webdav_result_success,
                         ),
                         modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                }
-                if (report.type == BackupConfigReportType.BACKUP && report.result.ignoredConfigKeys > 0) {
-                    Text(
-                        text = stringResource(R.string.backup_config_excluded_notice),
-                        modifier = Modifier.padding(bottom = 8.dp),
-                        color = LegadoTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (report.type == BackupConfigReportType.BACKUP &&
@@ -878,165 +869,20 @@ private fun BackupConfigDialogs(
                         color = LegadoTheme.colorScheme.error,
                     )
                 }
-                if (report.type == BackupConfigReportType.RESTORE &&
-                    (report.result.failedCategories.isNotEmpty() ||
-                        report.result.decryptionFailedConfigKeyNames.isNotEmpty())
-                ) {
-                    Text(
-                        text = stringResource(R.string.restore_result_failures_title),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
-                        color = LegadoTheme.colorScheme.error,
-                    )
-                    val separator = stringResource(R.string.backup_config_summary_separator)
-                    val sensitiveCategories: List<String> = report.result.failedCategories
-                        .filter { category -> isSensitiveRestoreCategory(category) }
-                        .map { category -> restoreCategoryTitle(category) }
-                    if (sensitiveCategories.isNotEmpty() || report.result.decryptionFailedConfigKeyNames.isNotEmpty()) {
-                        Text(
-                            text = stringResource(
-                                R.string.restore_failure_sensitive_group,
-                                sensitiveCategories.size.coerceAtLeast(1),
-                                sensitiveCategories.joinToString(separator),
-                            ),
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            color = LegadoTheme.colorScheme.error,
-                        )
-                    }
-                    val nonSensitiveFailures: List<String> = report.result.failedCategories
-                        .filterNot { category -> isSensitiveRestoreCategory(category) }
-                    if (nonSensitiveFailures.isNotEmpty()) {
-                        Text(
-                            text = if (report.result.configFileParseFailed && "settings" in nonSensitiveFailures) {
-                                stringResource(
-                                    R.string.restore_failure_parse_group,
-                                    restoreCategoryTitle("settings"),
-                                )
-                            } else {
-                                val categoryTitles = nonSensitiveFailures.map { category -> restoreCategoryTitle(category) }
-                                stringResource(
-                                    R.string.restore_failure_category_group,
-                                    categoryTitles.joinToString(separator),
-                                )
-                            },
-                            modifier = Modifier.padding(bottom = 4.dp),
-                            color = LegadoTheme.colorScheme.error,
-                        )
-                    }
-                }
-                if (report.type == BackupConfigReportType.RESTORE && detailCountForRestore(report.result) > 0) {
-                    if (report.showDetails) {
-                        val groupedDetails = linkedMapOf<String, LinkedHashSet<String>>()
-                        report.result.failedCategoryDetails.forEach { (category, details) ->
-                            details.distinct().forEach { detail ->
-                                val readable = readableRestoreFailure(
-                                    detail,
-                                    configParseFailed = category == "settings" &&
-                                        report.result.configFileParseFailed,
-                                    configWriteFailed = category == "settings" &&
-                                        !report.result.configFileParseFailed,
-                                )
-                                groupedDetails.getOrPut(readable) { linkedSetOf() } += restoreCategoryTitle(category)
-                            }
-                        }
-                        groupedDetails.forEach { (reason, categories) ->
-                            Text(
-                                text = stringResource(
-                                    R.string.backup_label_value,
-                                    categories.joinToString(stringResource(R.string.backup_config_summary_separator)),
-                                    reason,
-                                ),
-                                modifier = Modifier.padding(vertical = 2.dp),
-                                color = LegadoTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
-                if (report.type == BackupConfigReportType.RESTORE && visibleCategories.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.restore_result_success_categories),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
-                        color = LegadoTheme.colorScheme.primary,
-                    )
-                }
-                visibleCategories.forEach { (category, _) ->
-                        Text(
-                            text = restoreCategoryTitle(category),
-                            modifier = Modifier.padding(vertical = 2.dp),
-                        )
-                }
-                if (report.type == BackupConfigReportType.RESTORE && report.showDetails && unchangedCategoryCount > 0) {
-                    CollapsibleHeader(
-                        isCollapsed = !report.showAllCategories,
-                        title = stringResource(R.string.restore_result_unchanged_categories, unchangedCategoryCount),
-                        onToggle = { onIntent(BackupConfigIntent.ToggleAllRestoreCategories) },
-                    )
-                    if (report.showAllCategories) {
-                        unchangedCategories.forEach { (category, _) ->
-                            Text(
-                                text = restoreCategoryTitle(category),
-                                modifier = Modifier.padding(vertical = 2.dp),
-                                color = LegadoTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                if (report.type == BackupConfigReportType.RESTORE &&
-                    report.result.decryptionFailedConfigKeyNames.isNotEmpty()
-                ) {
-                    Text(
-                        text = stringResource(
-                            R.string.restore_result_decryption_failed,
-                            report.result.decryptionFailedConfigKeyNames.size,
-                        ),
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        color = LegadoTheme.colorScheme.error,
-                    )
-                }
-                val detailCount = if (report.type == BackupConfigReportType.RESTORE) {
-                    detailCountForRestore(report.result)
-                } else {
-                    report.result.failedConfigKeyNames.size +
-                        report.result.notSetConfigKeyNames.size +
-                        report.result.unsupportedConfigKeyNames.size +
-                        report.result.ignoredConfigKeyNames.size
-                }
-                if (report.type != BackupConfigReportType.RESTORE && detailCount > 0) {
-                    CollapsibleHeader(
-                        isCollapsed = !report.showDetails,
-                        title = if (report.showDetails) {
-                            stringResource(R.string.backup_config_integrity_collapse_details)
-                        } else {
-                            stringResource(R.string.backup_config_integrity_details)
-                        },
-                        onToggle = { onIntent(BackupConfigIntent.ToggleConfigReportDetails) },
-                    )
-                }
-                if (report.showDetails && report.type != BackupConfigReportType.RESTORE && detailCount > 0) {
-                    configDetailTitles(report.result).forEach { title ->
-                        Text(
-                            text = title,
-                            color = LegadoTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(vertical = 2.dp),
-                        )
-                    }
-                }
             }
         },
         confirmText = stringResource(R.string.ok),
         onConfirm = { onIntent(BackupConfigIntent.DismissDialog) },
-        dismissText = stringResource(
-            when {
-                hasBackupManifest -> R.string.backup_manifest_view
-                integrity?.type == BackupConfigReportType.RESTORE && hasRestoreDetails ->
-                    R.string.restore_result_view_details
-                else -> R.string.backup_manifest_view
-            }
-        ),
+        dismissText = when {
+            hasBackupManifest -> stringResource(R.string.backup_manifest_view)
+            hasRestoreDetails -> stringResource(R.string.restore_result_details_title)
+            else -> ""
+        },
         onDismiss = when {
             hasBackupManifest ->
                 ({ onIntent(BackupConfigIntent.OpenBackupManifest) })
-            integrity?.type == BackupConfigReportType.RESTORE && hasRestoreDetails ->
-                ({ onIntent(BackupConfigIntent.ToggleConfigReportDetails) })
+            hasRestoreDetails ->
+                ({ onIntent(BackupConfigIntent.OpenRestoreDetails) })
             else -> null
         },
     )
@@ -1136,7 +982,9 @@ private fun BackupConfigDialogs(
                 // 分类恢复和清空恢复都必须让用户明确选择受影响的类别。
                 // 清空恢复只列出备份中实际存在的类别，避免提示用户清空不存在的数据。
                 (if (preview.mode == io.legado.app.domain.model.RestoreMode.CLEAR_THEN_RESTORE) {
-                    preview.preview.categories.keys
+                    preview.preview.categories
+                        .filterValues { it > 0 }
+                        .keys
                 } else {
                     preview.preview.categories.keys + preview.preview.missingCategories
                 })
@@ -1210,30 +1058,48 @@ private fun BackupConfigDialogs(
     val clearRestore = dialog as? BackupConfigDialog.ConfirmClearRestore
     var clearCategoriesExpanded by remember(clearRestore?.selectedCategories) { mutableStateOf(false) }
     AppAlertDialog(
-        contentMaxHeight = adaptiveBackupDialogHeight(fraction = 0.32f),
+        contentMaxHeight = adaptiveBackupDialogHeight(fraction = 0.38f),
         fixedContentHeight = true,
         show = clearRestore != null,
         onDismissRequest = { onIntent(BackupConfigIntent.DismissDialog) },
         title = stringResource(R.string.restore_clear_confirm_title),
         text = stringResource(R.string.restore_clear_confirm_message),
         content = {
-            val categories = clearRestore?.selectedCategories.orEmpty().toList()
+            val categories = clearRestore?.selectedCategories.orEmpty().toList().sorted()
             Text(
                 text = stringResource(R.string.restore_clear_confirm_count, categories.size),
                 color = LegadoTheme.colorScheme.error,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
-            Text(
-                text = restoreCategoryTitles(
-                    if (clearCategoriesExpanded) categories else categories.take(4)
-                ) + if (!clearCategoriesExpanded && categories.size > 4) " …" else "",
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
+            if (clearCategoriesExpanded) {
+                Text(
+                    text = stringResource(R.string.restore_clear_confirm_selected_title),
+                    color = LegadoTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+            if (clearCategoriesExpanded) {
+                Column(modifier = Modifier.padding(bottom = 6.dp)) {
+                    categories.forEach { category ->
+                        Text(
+                            text = "• ${restoreCategoryTitle(category)}",
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = restoreCategoryTitles(categories.take(4)) +
+                        if (categories.size > 4) " …" else "",
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
             if (categories.size > 4) {
                 MediumTonalButton(
                     text = stringResource(
                         if (clearCategoriesExpanded) R.string.restore_clear_confirm_collapse
-                        else R.string.restore_clear_confirm_view_all
+                        else R.string.restore_clear_confirm_view_all,
+                        categories.size,
                     ),
                     onClick = { clearCategoriesExpanded = !clearCategoriesExpanded },
                     modifier = Modifier.fillMaxWidth(),
@@ -1252,7 +1118,7 @@ private fun BackupConfigDialogs(
 }
 
 @Composable
-private fun restoreCategoryTitle(category: String): String = stringResource(
+internal fun restoreCategoryTitle(category: String): String = stringResource(
     when (category) {
         "bookshelf" -> R.string.restore_category_bookshelf
         "bookmark" -> R.string.restore_category_bookmark
@@ -1292,34 +1158,6 @@ private fun restoreCategoryTitles(categories: Collection<String>): String {
     return titles.joinToString(separator = "、")
 }
 
-/** 将内部配置键归并为用户可理解的设置类别，避免在结果弹窗泄露实现细节。 */
-@Composable
-private fun configDetailTitles(result: io.legado.app.domain.model.BackupRestoreResult): List<String> {
-    val keys = result.failedConfigKeyNames + result.notSetConfigKeyNames +
-        result.unsupportedConfigKeyNames + result.ignoredConfigKeyNames +
-        result.decryptionFailedConfigKeyNames
-    val groups = linkedSetOf<String>()
-    keys.forEach { key ->
-        groups += when {
-            key.contains("webdav", ignoreCase = true) || key.contains("server", ignoreCase = true) ||
-                key.contains("network", ignoreCase = true) || key.contains("http", ignoreCase = true) ->
-                stringResource(R.string.backup_config_detail_network)
-            key.contains("theme", ignoreCase = true) || key.contains("color", ignoreCase = true) ||
-                key.contains("background", ignoreCase = true) ->
-                stringResource(R.string.backup_config_detail_theme)
-            key.contains("read", ignoreCase = true) || key.contains("textSelect", ignoreCase = true) ->
-                stringResource(R.string.backup_config_detail_reader)
-            key.contains("book", ignoreCase = true) || key.contains("shelf", ignoreCase = true) ->
-                stringResource(R.string.backup_config_detail_bookshelf)
-            else -> stringResource(R.string.backup_config_detail_other)
-        }
-    }
-    return groups.toList()
-}
-
-private fun detailCountForRestore(result: BackupRestoreResult): Int =
-    result.categoryStats.size + result.failedCategoryDetails.values.sumOf { it.distinct().size }
-
 /** 只展示实际存在的备份配置异常，避免让用户误以为 0 也是异常。 */
 @Composable
 private fun backupAnomalySummary(result: BackupRestoreResult): String {
@@ -1334,17 +1172,8 @@ private fun backupAnomalySummary(result: BackupRestoreResult): String {
     return items.joinToString(stringResource(R.string.backup_config_summary_separator))
 }
 
-/** 恢复失败类别中可能包含凭据的类别，用于明确提示密码错误影响。 */
-private fun isSensitiveRestoreCategory(category: String): Boolean = category in setOf(
-    "bookSource",
-    "rssSource",
-    "httpTTS",
-    "server",
-    "directLinkUploadRule",
-)
-
 @Composable
-private fun readableRestoreFailure(
+internal fun readableRestoreFailure(
     detail: String,
     configParseFailed: Boolean = false,
     configWriteFailed: Boolean = false,
