@@ -165,8 +165,10 @@ class BackupConfigViewModel(
             }
             BackupConfigIntent.CloseRestoreDetails ->
                 _uiState.update { it.copy(showRestoreDetails = false) }
+            BackupConfigIntent.CloseRestorePreview ->
+                _uiState.update { it.copy(showRestorePreview = false, activeDialog = null) }
             BackupConfigIntent.DismissDialog -> _uiState.update {
-                it.copy(activeDialog = null, showBackupManifest = false, showRestoreDetails = false)
+                it.copy(activeDialog = null, showBackupManifest = false, showRestoreDetails = false, showRestorePreview = false)
             }
             BackupConfigIntent.SelectBackupDirectory -> launchDirectoryPicker(runBackup = false)
             BackupConfigIntent.SelectBackupAndRunDirectory -> launchDirectoryPicker(runBackup = true)
@@ -177,10 +179,21 @@ class BackupConfigViewModel(
             is BackupConfigIntent.PerformBackup -> performBackup(intent.path, intent.mode)
             is BackupConfigIntent.RequestLocalRestore -> requestLocalRestore(intent.mode)
             is BackupConfigIntent.RestoreLocal -> restoreLocal(intent.uri)
-            is BackupConfigIntent.ConfirmRestorePreview -> performRestoreLocal(intent.uri)
-            is BackupConfigIntent.ConfirmNetworkRestorePreview -> performRestoreNetwork(intent.name)
+            is BackupConfigIntent.ConfirmRestorePreview -> {
+                _uiState.update { it.copy(showRestorePreview = false) }
+                performRestoreLocal(intent.uri)
+            }
+            is BackupConfigIntent.ConfirmNetworkRestorePreview -> {
+                _uiState.update { it.copy(showRestorePreview = false) }
+                performRestoreNetwork(intent.name)
+            }
             is BackupConfigIntent.RequestClearRestoreConfirmation -> _uiState.update {
-                it.copy(activeDialog = BackupConfigDialog.ConfirmClearRestore(intent.uri, intent.networkName, intent.selectedCategories))
+                it.copy(
+                    showRestorePreview = false,
+                    activeDialog = BackupConfigDialog.ConfirmClearRestore(
+                        intent.uri, intent.networkName, intent.selectedCategories, intent.localPassword,
+                    ),
+                )
             }
             is BackupConfigIntent.ConfirmClearRestore -> {
                 if (intent.networkName != null) performRestoreNetwork(intent.networkName, intent.selectedCategories)
@@ -457,7 +470,9 @@ class BackupConfigViewModel(
                                     .keys,
                                 categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
                                 localPassword = "",
-                            )
+                            ),
+                            showRestorePreview = selectedRestoreMode == RestoreMode.BY_CATEGORY ||
+                                selectedRestoreMode == RestoreMode.CLEAR_THEN_RESTORE,
                         )
                     }
                 } }
@@ -479,7 +494,8 @@ class BackupConfigViewModel(
         activeOperationId = null
         val dialog = _uiState.value.activeDialog as? BackupConfigDialog.RestorePreview
         val categories = dialog?.selectedCategories?.takeIf { it.isNotEmpty() } ?: confirmedCategories
-        val localPassword = dialog?.localPassword.orEmpty()
+        val localPassword = dialog?.localPassword
+            ?: (_uiState.value.activeDialog as? BackupConfigDialog.ConfirmClearRestore)?.localPassword.orEmpty()
         val restoreMode = dialog?.mode ?: selectedRestoreMode
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
@@ -561,7 +577,9 @@ class BackupConfigViewModel(
                                     .keys,
                                 categoryModes = preview.categories.keys.associateWith { RestoreMode.KEEP_APPLICATION },
                                 localPassword = "",
-                            )
+                            ),
+                            showRestorePreview = selectedRestoreMode == RestoreMode.BY_CATEGORY ||
+                                selectedRestoreMode == RestoreMode.CLEAR_THEN_RESTORE,
                         )
                     }
                 } },
@@ -573,11 +591,18 @@ class BackupConfigViewModel(
     private fun performRestoreNetwork(name: String, confirmedCategories: Set<String> = emptySet()) {
         activeOperationId = null
         val previewDialog = _uiState.value.activeDialog as? BackupConfigDialog.RestorePreview
-        val password = previewDialog?.localPassword.orEmpty()
+        val clearDialog = _uiState.value.activeDialog as? BackupConfigDialog.ConfirmClearRestore
+        val password = previewDialog?.localPassword
+            ?: (_uiState.value.activeDialog as? BackupConfigDialog.ConfirmClearRestore)?.localPassword.orEmpty()
         val categoryModes = previewDialog?.categoryModes.orEmpty()
+        val categories = previewDialog?.selectedCategories?.takeIf { it.isNotEmpty() }
+            ?: clearDialog?.selectedCategories
+            ?: confirmedCategories
         _uiState.update { it.copy(activeDialog = BackupConfigDialog.Loading(R.string.on_restore)) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { webDavBackupUseCase.restore(name, selectedRestoreMode, categoryModes, password) }
+            runCatching {
+                webDavBackupUseCase.restore(name, selectedRestoreMode, categories, categoryModes, password)
+            }
                 .fold(
                     onSuccess = { operationId ->
                         runCatching { awaitRestoreResult(operationId) }.fold(

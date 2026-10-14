@@ -198,6 +198,7 @@ BackupConfigEffect.LaunchImportOldDataFilePicker ->
     }
 
     val manifestReport = (state.activeDialog as? BackupConfigDialog.ConfigIntegrityReport)?.result
+    val restorePreviewDialog = state.activeDialog as? BackupConfigDialog.RestorePreview
     if (state.showBackupManifest && manifestReport != null) {
         BackupManifestScreen(
             result = manifestReport,
@@ -219,6 +220,11 @@ BackupConfigEffect.LaunchImportOldDataFilePicker ->
                 )
             },
             onBackClick = { viewModel.onIntent(BackupConfigIntent.CloseRestoreDetails) },
+        )
+    } else if (state.showRestorePreview && restorePreviewDialog != null) {
+        RestorePreviewScreen(
+            preview = restorePreviewDialog,
+            onIntent = viewModel::onIntent,
         )
     } else {
         BackupConfigScreen(
@@ -1047,7 +1053,9 @@ private fun BackupConfigDialogs(
         confirmText = stringResource(R.string.restore),
         onConfirm = { preview?.let {
             if (it.mode == RestoreMode.CLEAR_THEN_RESTORE) {
-                onIntent(BackupConfigIntent.RequestClearRestoreConfirmation(it.uri, it.networkName, it.selectedCategories))
+                onIntent(BackupConfigIntent.RequestClearRestoreConfirmation(
+                    it.uri, it.networkName, it.selectedCategories, it.localPassword,
+                ))
             } else if (it.networkName != null) onIntent(BackupConfigIntent.ConfirmNetworkRestorePreview(it.networkName))
             else onIntent(BackupConfigIntent.ConfirmRestorePreview(it.uri))
         } },
@@ -1109,7 +1117,9 @@ private fun BackupConfigDialogs(
         confirmText = stringResource(R.string.restore_clear_confirm_action),
         onConfirm = {
             clearRestore?.let {
-                onIntent(BackupConfigIntent.ConfirmClearRestore(it.uri, it.networkName, it.selectedCategories))
+                onIntent(BackupConfigIntent.ConfirmClearRestore(
+                    it.uri, it.networkName, it.selectedCategories, it.localPassword,
+                ))
             }
         },
         dismissText = stringResource(R.string.cancel),

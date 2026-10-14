@@ -209,6 +209,9 @@
     <string name="restore_from_network_by_category">按类别选择（WebDAV）</string>
     <string name="restore_preview">恢复预览</string>
     <string name="restore_preview_summary">文件：%1$d  资源：%2$d  警告：%3$d</string>
+    <string name="restore_preview_title">恢复预览</string>
+    <string name="restore_preview_selected_summary">已选择 %1$d/%2$d 个类别</string>
+    <string name="restore_preview_warning_count">警告：%1$d</string>
     <string name="restore_preview_source_title">恢复来源</string>
     <string name="restore_preview_source_webdav">WebDAV：%1$s</string>
     <string name="restore_preview_contents_title">选择恢复内容</string>

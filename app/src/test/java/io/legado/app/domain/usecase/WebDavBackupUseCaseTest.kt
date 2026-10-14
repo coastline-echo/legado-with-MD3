@@ -46,7 +46,7 @@ class WebDavBackupUseCaseTest {
         override suspend fun getBackupNames(): List<String> { calls += "list"; return emptyList() }
         override suspend fun getLatestBackup(): WebDavBackup? { calls += "latest"; return null }
         override suspend fun restore(name: String): String { calls += "restore"; return "operation-1" }
-        override suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
+        override suspend fun restore(name: String, mode: RestoreMode, selectedCategories: Set<String>, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
             calls += "restore"
             return "operation-1"
         }

@@ -169,6 +169,9 @@
     <string name="restore_from_network_by_category">按類別選擇（WebDAV）</string>
     <string name="restore_preview">還原預覽</string>
     <string name="restore_preview_summary">檔案：%1$d  資源：%2$d  警告：%3$d</string>
+    <string name="restore_preview_title">還原預覽</string>
+    <string name="restore_preview_selected_summary">已選擇 %1$d/%2$d 個類別</string>
+    <string name="restore_preview_warning_count">警告：%1$d</string>
     <string name="restore_preview_source_title">還原來源</string>
     <string name="restore_preview_source_webdav">WebDAV：%1$s</string>
     <string name="restore_preview_contents_title">選擇還原內容</string>

@@ -25,6 +25,7 @@ data class BackupConfigUiState(
     val lastResult: BackupRestoreResult? = null,
     val showBackupManifest: Boolean = false,
     val showRestoreDetails: Boolean = false,
+    val showRestorePreview: Boolean = false,
 )
 
 @Stable
@@ -84,6 +85,7 @@ sealed interface BackupConfigDialog {
         val uri: String,
         val networkName: String? = null,
         val selectedCategories: Set<String> = emptySet(),
+        val localPassword: String = "",
     ) : BackupConfigDialog
     data class Loading(
         @StringRes val titleRes: Int,
@@ -132,6 +134,7 @@ sealed interface BackupConfigIntent {
     data object CloseBackupManifest : BackupConfigIntent
     data object OpenRestoreDetails : BackupConfigIntent
     data object CloseRestoreDetails : BackupConfigIntent
+    data object CloseRestorePreview : BackupConfigIntent
     data object SelectBackupDirectory : BackupConfigIntent
     data object SelectBackupAndRunDirectory : BackupConfigIntent
     data class BackupDirectorySelected(val path: String, val runBackup: Boolean) : BackupConfigIntent
@@ -142,8 +145,8 @@ sealed interface BackupConfigIntent {
     data class RestoreLocal(val uri: String) : BackupConfigIntent
     data class ConfirmRestorePreview(val uri: String) : BackupConfigIntent
     data class ConfirmNetworkRestorePreview(val name: String) : BackupConfigIntent
-    data class RequestClearRestoreConfirmation(val uri: String, val networkName: String? = null, val selectedCategories: Set<String> = emptySet()) : BackupConfigIntent
-    data class ConfirmClearRestore(val uri: String, val networkName: String? = null, val selectedCategories: Set<String> = emptySet()) : BackupConfigIntent
+    data class RequestClearRestoreConfirmation(val uri: String, val networkName: String? = null, val selectedCategories: Set<String> = emptySet(), val localPassword: String = "") : BackupConfigIntent
+    data class ConfirmClearRestore(val uri: String, val networkName: String? = null, val selectedCategories: Set<String> = emptySet(), val localPassword: String = "") : BackupConfigIntent
     data class ToggleRestorePreviewCategory(val category: String) : BackupConfigIntent
     data class SetRestorePreviewCategoryMode(val category: String, val mode: RestoreMode) : BackupConfigIntent
     data class SetRestoreBackupPassword(val value: String) : BackupConfigIntent

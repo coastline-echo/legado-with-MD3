@@ -56,9 +56,9 @@ class WebDavBackupRepository : WebDavBackupGateway {
         }
     }
 
-    override suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
+    override suspend fun restore(name: String, mode: RestoreMode, selectedCategories: Set<String>, categoryModes: Map<String, RestoreMode>, backupPassword: String?): String {
         return withContext(IO) {
-            AppWebDav.restoreWebDav(name, mode, categoryModes, backupPassword)
+            AppWebDav.restoreWebDav(name, mode, selectedCategories, categoryModes, backupPassword)
         }
     }
 

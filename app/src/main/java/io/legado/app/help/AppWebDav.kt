@@ -143,7 +143,7 @@ object AppWebDav {
     }
 
 @Throws(WebDavException::class, NoStackTraceException::class)
-    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String {
+    suspend fun restoreWebDav(name: String, mode: RestoreMode = RestoreMode.KEEP_APPLICATION, selectedCategories: Set<String> = emptySet(), categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String {
         val auth = authorization ?: throw NoStackTraceException("WebDAV 未配置或认证失败")
         val webDav = WebDav(rootWebDavUrl + name, auth)
         val operationId = java.util.UUID.randomUUID().toString()
@@ -161,6 +161,7 @@ object AppWebDav {
                 Restore.restoreUnzipped(
                     path = Backup.backupPath,
                     mode = mode,
+                    selectedCategories = selectedCategories,
                     categoryModes = categoryModes,
                     backupPassword = backupPassword,
                     operationId = operationId,

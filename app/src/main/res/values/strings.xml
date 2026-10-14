@@ -277,6 +277,9 @@
     <string name="backup_webdav_result_failed">WebDAV backup: failed</string>
     <string name="restore_preview">Restore preview</string>
     <string name="restore_preview_summary">Files: %1$d  Resources: %2$d  Warnings: %3$d</string>
+    <string name="restore_preview_title">Restore preview</string>
+    <string name="restore_preview_selected_summary">Selected categories: %1$d/%2$d</string>
+    <string name="restore_preview_warning_count">Warnings: %1$d</string>
     <string name="restore_preview_source_title">Restore source</string>
     <string name="restore_preview_source_webdav">WebDAV: %1$s</string>
     <string name="restore_preview_contents_title">Choose content to restore</string>

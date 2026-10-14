@@ -47,10 +47,10 @@ class WebDavBackupUseCase(
         return webDavBackupGateway.restore(name)
     }
 
-    suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String {
+    suspend fun restore(name: String, mode: RestoreMode, selectedCategories: Set<String> = emptySet(), categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String {
         val syncResult = webDavBackupGateway.syncConfig()
         if (syncResult.isFailure) throw syncResult.exceptionOrNull() ?: NoStackTraceException("WebDAV 配置同步失败")
-        return webDavBackupGateway.restore(name, mode, categoryModes, backupPassword)
+        return webDavBackupGateway.restore(name, mode, selectedCategories, categoryModes, backupPassword)
     }
 
     suspend fun preview(name: String): RestorePreview {

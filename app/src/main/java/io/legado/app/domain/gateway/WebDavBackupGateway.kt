@@ -14,6 +14,6 @@ interface WebDavBackupGateway {
     suspend fun getBackupNames(): List<String>
     suspend fun getLatestBackup(): WebDavBackup?
     suspend fun restore(name: String): String
-    suspend fun restore(name: String, mode: RestoreMode, categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String
+    suspend fun restore(name: String, mode: RestoreMode, selectedCategories: Set<String> = emptySet(), categoryModes: Map<String, RestoreMode> = emptyMap(), backupPassword: String? = null): String
     suspend fun preview(name: String): RestorePreview
 }
