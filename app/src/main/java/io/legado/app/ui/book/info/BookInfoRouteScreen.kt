@@ -1,8 +1,6 @@
 package io.legado.app.ui.book.info
 
-import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -31,13 +29,11 @@ import io.legado.app.data.entities.BookGroup
 import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.isLocal
+import io.legado.app.help.security.BiometricUnlockLauncher
 import io.legado.app.model.SourceCallBack
-import io.legado.app.ui.book.info.edit.BookInfoEditActivity
-import io.legado.app.ui.book.toc.TocActivityResult
 import io.legado.app.ui.login.SourceLoginJsExtensions
 import io.legado.app.ui.widget.components.filePicker.FilePickerSheet
 import io.legado.app.utils.RealPathUtil
-import io.legado.app.utils.StartActivityContract
 import io.legado.app.utils.externalFiles
 import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.openFileUri
@@ -59,11 +55,13 @@ fun BookInfoRouteScreen(
     origin: String? = null,
     coverPath: String? = null,
     viewModel: BookInfoViewModel,
-    onBack: () -> Unit,
-    onFinish: (resultCode: Int?, afterTransition: Boolean) -> Unit,
+    onBack: () -> Boolean = { true },
+    onFinish: (resultCode: Int?, afterTransition: Boolean) -> Boolean = { _, _ -> true },
     onOpenSearch: (String) -> Unit,
     onOpenBookSourceEdit: (String) -> Unit,
     onOpenSourceLogin: (String) -> Unit,
+    onOpenToc: (String) -> Unit,
+    onOpenInfoEdit: (String) -> Unit,
     onOpenReader: (bookUrl: String, inBookshelf: Boolean, chapterChanged: Boolean) -> Unit = { _, _, _ -> },
     onOpenMangaReader: (bookUrl: String, inBookshelf: Boolean, chapterChanged: Boolean) -> Unit = { _, _, _ -> },
     onOpenAudioPlay: (bookUrl: String, inBookshelf: Boolean) -> Unit = { _, _ -> },
@@ -74,6 +72,8 @@ fun BookInfoRouteScreen(
     onOpenCharacterList: (bookUrl: String) -> Unit = {},
     onOpenKnowledgeList: (bookUrl: String) -> Unit = {},
     onOpenEventList: (bookUrl: String) -> Unit = {},
+    /** 私密功能需要本地密码，未设置时引导去设置页（与书架同一条路径） */
+    onOpenSettings: () -> Unit = {},
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedCoverKey: String? = null,
@@ -83,11 +83,13 @@ fun BookInfoRouteScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val showMangaUi by rememberUpdatedState(uiState.showMangaUi)
+    // 资源串在 composable 作用域内解析，避免 LocalContext.current.getString 拿到过期值
+    val unlockTitle = stringResource(R.string.private_unlock_title)
+    val unlockSubtitle = stringResource(R.string.private_unlock_subtitle)
+    val unlockUsePassword = stringResource(R.string.private_unlock_use_password)
+    val noPasswordHint = stringResource(R.string.private_content_no_password)
     var showSelectBooksDirSheet by remember { mutableStateOf(false) }
 
-    val tocActivityResult = rememberLauncherForActivityResult(TocActivityResult()) {
-        viewModel.onTocResult(it)
-    }
     val localBookTreeSelect =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
@@ -99,13 +101,6 @@ fun BookInfoRouteScreen(
             }
             viewModel.onIntent(BookInfoIntent.SetDefaultBookTreeUri(uri.toString()))
         }
-    val infoEditResult = rememberLauncherForActivityResult(
-        StartActivityContract(BookInfoEditActivity::class.java)
-    ) {
-        if (it.resultCode == Activity.RESULT_OK) {
-            viewModel.onInfoEdited()
-        }
-    }
 
     LaunchedEffect(bookUrl, name, author, origin, coverPath, viewModel) {
         viewModel.initData(
@@ -139,9 +134,7 @@ fun BookInfoRouteScreen(
                 }
 
                 is BookInfoEffect.OpenBookInfoEdit -> {
-                    infoEditResult.launch {
-                        putExtra("bookUrl", effect.bookUrl)
-                    }
+                    onOpenInfoEdit(effect.bookUrl)
                 }
 
                 is BookInfoEffect.OpenReader -> {
@@ -168,7 +161,9 @@ fun BookInfoRouteScreen(
                     }
                 }
 
-                is BookInfoEffect.OpenToc -> tocActivityResult.launch(effect.bookUrl)
+                is BookInfoEffect.OpenToc -> {
+                    onOpenToc(effect.bookUrl)
+                }
                 is BookInfoEffect.OpenBookSourceEdit -> {
                     onOpenBookSourceEdit(effect.sourceUrl)
                 }
@@ -216,6 +211,28 @@ fun BookInfoRouteScreen(
                 is BookInfoEffect.OpenEventList -> {
                     onOpenEventList(effect.bookUrl)
                 }
+
+                BookInfoEffect.RequestBiometricUnlock -> {
+                    BiometricUnlockLauncher.launch(
+                        activity = activity,
+                        title = unlockTitle,
+                        subtitle = unlockSubtitle,
+                        negativeButtonText = unlockUsePassword,
+                        onPassword = { password ->
+                            viewModel.onIntent(BookInfoIntent.SubmitPrivatePassword(password))
+                        },
+                        onFallback = {
+                            viewModel.onIntent(BookInfoIntent.ShowPrivatePassword)
+                        },
+                        onError = { message -> context.toastOnUi(message) },
+                    )
+                }
+
+                BookInfoEffect.NavigateToLocalPasswordSettings -> {
+                    // 只弹提示用户进不去设置页，这里与书架保持一致：说明原因后直接跳过去
+                    context.toastOnUi(noPasswordHint)
+                    onOpenSettings()
+                }
             }
         }
     }
@@ -229,12 +246,16 @@ fun BookInfoRouteScreen(
             localBookTreeSelect.launch(null)
         },
     )
+    // 详情页是普通 nav3 目的地（覆盖层 + 零转场）：封面飞行由形变舞台负责，
+    // 页面里的封面只上报终点位置，并在形变期间让位给飞行封面。
+    // 详情页是普通 nav3 目的地：封面飞行交给共享元素，两端 key 由路由统一携带
+    // （`route.sharedCoverKey` 就是源卡片登记的那一个），页面自身不再接管返回。
     BookInfoScreen(
         state = uiState,
         groups = viewModel.allGroups
             .collectAsStateWithLifecycle(persistentListOf<BookGroup>()).value,
         onIntent = viewModel::onIntent,
-        onBack = onBack,
+        onBack = { onBack() },
         sharedTransitionScope = sharedTransitionScope,
         animatedVisibilityScope = animatedVisibilityScope,
         sharedCoverKey = sharedCoverKey,
@@ -253,6 +274,7 @@ private fun runSourceCallback(
         effect.source,
         effect.book,
         null,
+        result = effect.action.resultText,
     ) {
         when (val action = effect.action) {
             is BookInfoCallbackAction.Search -> {
@@ -279,6 +301,19 @@ private fun runSourceCallback(
         }
     }
 }
+
+/**
+ * 书源 callBackJs 使用的 result 变量，取值与旧版 BookInfoActivity 各点击入口一致：
+ * 作者/书名/标签点击传关键字，分享与复制传对应文本，其余为空。
+ */
+private val BookInfoCallbackAction.resultText: String?
+    get() = when (this) {
+        is BookInfoCallbackAction.Search -> keyword
+        is BookInfoCallbackAction.ShareText -> text
+        is BookInfoCallbackAction.CopyText -> text
+        BookInfoCallbackAction.ClearCache -> null
+        BookInfoCallbackAction.None -> null
+    }
 
 private fun runIntroJs(activity: AppCompatActivity, effect: BookInfoEffect.RunIntroJs) {
     val source = effect.source ?: return

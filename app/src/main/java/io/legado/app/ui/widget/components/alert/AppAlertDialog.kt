@@ -47,6 +47,8 @@ fun AppAlertDialog(
     content: (@Composable () -> Unit)? = null,
     confirmText: String = "确定", // 默认文字
     onConfirm: (() -> Unit)? = null,
+    /** 确定按钮是否可点：表单类弹窗里输入还不合法时置 false，而不是点了才弹一句提示。 */
+    confirmEnabled: Boolean = true,
     dismissText: String = "取消",
     onDismiss: (() -> Unit)? = null,
 ) {
@@ -107,6 +109,7 @@ fun AppAlertDialog(
                             PrimaryButton(
                                 text = confirmText,
                                 modifier = Modifier.weight(1f),
+                                enabled = confirmEnabled,
                                 onClick = {
                                     onConfirm()
                                 }
@@ -164,6 +167,7 @@ fun AppAlertDialog(
                         ProvideAppDensity {
                             PrimaryButton(
                                 onClick = onConfirm,
+                                enabled = confirmEnabled,
                                 text = confirmText
                             )
                         }
@@ -199,6 +203,7 @@ fun <T> AppAlertDialog(
     textProvider: @Composable (T.() -> String)? = null,
     confirmText: String = "确定",
     onConfirm: ((T) -> Unit)? = null,
+    confirmEnabled: Boolean = true,
     dismissText: String = "取消",
     onDismiss: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -233,6 +238,7 @@ fun <T> AppAlertDialog(
             fixedContentHeight = fixedContentHeight,
             confirmText = confirmText,
             onConfirm = onConfirm?.let { { it(currentData) } },
+            confirmEnabled = confirmEnabled,
             dismissText = dismissText,
             onDismiss = onDismiss,
             content = content?.let { { it(currentData) } }

@@ -443,6 +443,23 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
             .toMutableMap()
+        if (PreferKey.bookshelfSelectedGroupId !in configMap) {
+            (configMap[PreferKey.saveTabPosition] as? Long)?.let {
+                configMap[PreferKey.bookshelfSelectedGroupId] = it
+            }
+        }
+        if (PreferKey.readBrightnessMode !in configMap) {
+            when (val legacy = configMap[PreferKey.showBrightnessView]) {
+                is String -> configMap[PreferKey.readBrightnessMode] = legacy
+                is Boolean -> configMap[PreferKey.readBrightnessMode] = if (legacy) "1" else "0"
+            }
+        }
+        if (PreferKey.readBrightnessControlPosition !in configMap) {
+            when (val legacy = configMap[PreferKey.brightnessVwPos]) {
+                is String -> configMap[PreferKey.readBrightnessControlPosition] = legacy
+                is Boolean -> configMap[PreferKey.readBrightnessControlPosition] = if (legacy) "1" else "0"
+            }
+        }
         // 文本选择菜单顺序保存在 ReadSettings DataStore，不在 AppConfigStore 中。
         configMap[PreferKey.textSelectMenuConfig] = GlobalContext.get().get<ReadSettingsGateway>().currentSettings.textSelectMenuConfig
         val writtenConfigKeys = mutableSetOf<String>()

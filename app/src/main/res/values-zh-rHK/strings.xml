@@ -3120,4 +3120,4 @@
     <string name="backup_local_result_failed">本地備份：失敗</string>
     <string name="backup_webdav_result_success">WebDAV 上傳：成功</string>
     <string name="backup_webdav_result_failed">WebDAV 備份：失敗</string>
-</resources>
+\n\n</resources>

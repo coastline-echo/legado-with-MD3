@@ -1,23 +1,17 @@
 package io.legado.app.ui.book.explore
 
 import android.annotation.SuppressLint
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -27,9 +21,12 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.outlined.FilterAlt
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import io.legado.app.ui.widget.components.AppTextField
+import io.legado.app.ui.widget.components.alert.AppAlertDialog
+import io.legado.app.ui.widget.components.text.AppText
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.runtime.Composable
@@ -39,38 +36,39 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
-import io.legado.app.data.entities.SearchBook
 import io.legado.app.R
+import io.legado.app.data.entities.SearchBook
 import io.legado.app.domain.model.BookShelfState
 import io.legado.app.ui.main.bookCoverSharedElementKey
-import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.responsiveHazeEffect
 import io.legado.app.ui.theme.responsiveHazeSource
 import io.legado.app.ui.widget.components.AppPullToRefresh
 import io.legado.app.ui.widget.components.AppScaffold
-import io.legado.app.ui.widget.components.AppSlider
 import io.legado.app.ui.widget.components.LoadMoreFooter
 import io.legado.app.ui.widget.components.book.SearchBookGridItem
 import io.legado.app.ui.widget.components.book.SearchBookListItem
 import io.legado.app.ui.widget.components.book.SearchBookPreviewSheet
-import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.conflict.BookshelfConflictSheet
 import io.legado.app.ui.widget.components.explore.ExploreKindSelectSheet
+import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
-import io.legado.app.ui.widget.components.text.AppText
+import io.legado.app.ui.widget.components.settingItem.CompactClickableSettingItem
+import io.legado.app.ui.widget.components.settingItem.CompactSliderSettingItem
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
+import io.legado.app.ui.widget.components.topbar.GlassTopAppBarScrollBehavior
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import io.legado.app.ui.widget.components.topbar.TopBarTextActionButton
+import io.legado.app.utils.toastOnUi
 import org.koin.androidx.compose.koinViewModel
+import splitties.init.appCtx
 
 private enum class BookFilterState(val id: Int) {
     SHOW_ALL(0),
@@ -85,7 +83,7 @@ private enum class BookFilterState(val id: Int) {
 
 @SuppressLint("LocalContextConfigurationRead", "ConfigurationScreenWidthHeight")
 @OptIn(
-    ExperimentalMaterial3Api::class, ExperimentalHazeMaterialsApi::class,
+    ExperimentalMaterial3Api::class,
     ExperimentalMaterial3ExpressiveApi::class, ExperimentalSharedTransitionApi::class
 )
 @Composable
@@ -96,6 +94,9 @@ fun ExploreShowRouteScreen(
     onBookClick: (SearchBook, String?) -> Unit,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    embeddedInMain: Boolean = false,
+    embeddedPadding: PaddingValues = PaddingValues(0.dp),
+    embeddedScrollBehavior: GlassTopAppBarScrollBehavior? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -113,7 +114,7 @@ fun ExploreShowRouteScreen(
                     effect.sharedCoverKey,
                 )
 
-                is ExploreShowEffect.ShowMessage -> {}
+                is ExploreShowEffect.ShowMessage -> appCtx.toastOnUi(effect.message)
             }
         }
     }
@@ -126,12 +127,15 @@ fun ExploreShowRouteScreen(
         onBookClick = onBookClick,
         sharedTransitionScope = sharedTransitionScope,
         animatedVisibilityScope = animatedVisibilityScope,
+        embeddedInMain = embeddedInMain,
+        embeddedPadding = embeddedPadding,
+        embeddedScrollBehavior = embeddedScrollBehavior,
     )
 }
 
 @SuppressLint("LocalContextConfigurationRead", "ConfigurationScreenWidthHeight")
 @OptIn(
-    ExperimentalMaterial3Api::class, ExperimentalHazeMaterialsApi::class,
+    ExperimentalMaterial3Api::class,
     ExperimentalMaterial3ExpressiveApi::class, ExperimentalSharedTransitionApi::class
 )
 @Composable
@@ -143,10 +147,15 @@ fun ExploreShowScreen(
     onBookClick: (SearchBook, String?) -> Unit,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    embeddedInMain: Boolean = false,
+    embeddedPadding: PaddingValues = PaddingValues(0.dp),
+    embeddedScrollBehavior: GlassTopAppBarScrollBehavior? = null,
 ) {
 
     var previewBook by remember { mutableStateOf<SearchBook?>(null) }
     var previewSharedCoverKey by remember { mutableStateOf<String?>(null) }
+    var showJumpPageDialog by remember { mutableStateOf(false) }
+    var jumpPageInput by remember { mutableStateOf("") }
 
     val filterStateId = state.filterStateId
     val books = remember(state.books, filterStateId) {
@@ -160,7 +169,8 @@ fun ExploreShowScreen(
     }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
-    val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
+    val defaultScrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
+    val scrollBehavior = embeddedScrollBehavior ?: defaultScrollBehavior
     val isGridMode = state.layoutState == 1
     val hazeState = remember { HazeState() }
     val showLoadMoreFooter = !state.isRefreshing &&
@@ -219,37 +229,27 @@ fun ExploreShowScreen(
         show = state.sheet == ExploreShowSheet.GridCount,
         onDismissRequest = { onIntent(ExploreShowIntent.DismissSheet) }
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            AppText(
-                text = "布局列数",
-                style = LegadoTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            TextCard(
-                text = "${state.gridCount} 列",
-                textStyle = LegadoTheme.typography.titleSmall,
-                backgroundColor = LegadoTheme.colorScheme.onSheetContent,
-                verticalPadding = 4.dp,
-                horizontalPadding = 12.dp,
-                cornerRadius = 12.dp
+        CompactClickableSettingItem(
+            title = stringResource(R.string.layout_mode),
+            description = stringResource(
+                if (isGridMode) R.string.layout_mode_grid else R.string.layout_mode_list
+            ),
+            imageVector = Icons.Default.GridView,
+            onClick = { onIntent(ExploreShowIntent.ToggleLayout) }
+        )
+        if (isGridMode) {
+            Spacer(modifier = Modifier.height(8.dp))
+            CompactSliderSettingItem(
+                title = stringResource(R.string.a11y_grid_columns),
+                value = state.gridCount.toFloat(),
+                valueRange = 1f..10f,
+                steps = 8,
+                imageVector = Icons.Default.GridView,
+                onValueChange = {
+                    onIntent(ExploreShowIntent.SaveGridCount(it.toInt().coerceIn(1, 10)))
+                }
             )
         }
-
-        AppSlider(
-            value = state.gridCount.toFloat(),
-            onValueChange = {
-                onIntent(ExploreShowIntent.SaveGridCount(it.toInt().coerceIn(1, 10)))
-            },
-            valueRange = 1f..10f,
-            steps = 8,
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
 
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -266,52 +266,20 @@ fun ExploreShowScreen(
         }
     )
 
-    AppScaffold(
-        modifier = Modifier
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            GlassMediumFlexibleTopAppBar(
-                modifier = Modifier.responsiveHazeEffect(state = hazeState),
-                title = state.selectedKindTitle ?: title,
-                navigationIcon = {
-                    TopBarNavigationButton(onClick = onBack)
-                },
-                actions = {
+    BookshelfConflictSheet(
+        conflict = state.bookshelfConflict,
+        isResolving = state.isResolvingBookshelfConflict,
+        onDismissRequest = { onIntent(ExploreShowIntent.DismissBookshelfConflict) },
+        onOpenExistingBook = { onIntent(ExploreShowIntent.OpenBookshelfConflictBook(it)) },
+        onCoexist = { existingBookUrl, options ->
+            onIntent(ExploreShowIntent.CoexistWithBookshelfConflict(existingBookUrl, options))
+        },
+        onMigrate = { existingBookUrl, options ->
+            onIntent(ExploreShowIntent.MigrateBookshelfConflict(existingBookUrl, options))
+        },
+    )
 
-                    AnimatedVisibility(
-                        visible = isGridMode,
-                        enter = fadeIn(tween(300)),
-                        exit = fadeOut(tween(300))
-                    ) {
-                        TopBarActionButton(
-                            onClick = {
-                                onIntent(
-                                    ExploreShowIntent.ShowSheet(
-                                        ExploreShowSheet.GridCount
-                                    )
-                                )
-                            },
-                            imageVector = Icons.AutoMirrored.Outlined.FormatListBulleted,
-                            contentDescription = stringResource(R.string.a11y_grid_columns)
-                        )
-                    }
-
-                    TopBarActionButton(
-                        onClick = { onIntent(ExploreShowIntent.ShowSheet(ExploreShowSheet.KindSelect)) },
-                        imageVector = Icons.Outlined.FilterAlt,
-                        contentDescription = stringResource(R.string.select_or_search_category)
-                    )
-
-                    TopBarActionButton(
-                        onClick = { onIntent(ExploreShowIntent.ToggleLayout) },
-                        imageVector = if (!isGridMode) Icons.AutoMirrored.Outlined.FormatListBulleted else Icons.Default.GridView,
-                        contentDescription = stringResource(R.string.a11y_switch_layout)
-                    )
-                },
-                scrollBehavior = scrollBehavior
-            )
-        }
-    ) { paddingValues ->
+    val resultContent: @Composable (PaddingValues) -> Unit = { paddingValues ->
         AppPullToRefresh(
             modifier = Modifier.fillMaxSize(),
             isRefreshing = state.isRefreshing,
@@ -329,11 +297,15 @@ fun ExploreShowScreen(
                         state = gridState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .responsiveHazeSource(hazeState),
+                            .then(
+                                if (embeddedInMain) Modifier else Modifier.responsiveHazeSource(
+                                    hazeState
+                                )
+                            ),
                         columns = GridCells.Fixed(state.gridCount),
                         contentPadding = PaddingValues(
                             top = paddingValues.calculateTopPadding() + 12.dp,
-                            bottom = paddingValues.calculateBottomPadding() + 12.dp,
+                            bottom = paddingValues.calculateBottomPadding() + if (embeddedInMain) 108.dp else 12.dp,
                             start = 12.dp,
                             end = 12.dp
                         ),
@@ -384,11 +356,15 @@ fun ExploreShowScreen(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
-                            .responsiveHazeSource(hazeState),
+                            .then(
+                                if (embeddedInMain) Modifier else Modifier.responsiveHazeSource(
+                                    hazeState
+                                )
+                            ),
                         state = listState,
                         contentPadding = PaddingValues(
                             top = paddingValues.calculateTopPadding(),
-                            bottom = paddingValues.calculateBottomPadding() + 16.dp
+                            bottom = paddingValues.calculateBottomPadding() + if (embeddedInMain) 108.dp else 16.dp
                         )
                     ) {
                         itemsIndexed(
@@ -434,6 +410,73 @@ fun ExploreShowScreen(
                 }
             }
         }
+    }
+
+    if (embeddedInMain) {
+        resultContent(embeddedPadding)
+    } else {
+        AppScaffold(
+            modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+            topBar = {
+                GlassMediumFlexibleTopAppBar(
+                    modifier = Modifier.responsiveHazeEffect(state = hazeState),
+                    title = state.selectedKindTitle ?: title,
+                    navigationIcon = { TopBarNavigationButton(onClick = onBack) },
+                    actions = {
+                        // 列表 / 网格切换与列数都收进同一个 sheet，顶栏只留一个入口。
+                        TopBarActionButton(
+                            onClick = {
+                                onIntent(ExploreShowIntent.ShowSheet(ExploreShowSheet.GridCount))
+                            },
+                            imageVector = Icons.Default.GridView,
+                            contentDescription = stringResource(R.string.a11y_switch_layout)
+                        )
+                        TopBarActionButton(
+                            onClick = { onIntent(ExploreShowIntent.ShowSheet(ExploreShowSheet.KindSelect)) },
+                            imageVector = AppIcons.Filter,
+                            contentDescription = stringResource(R.string.select_or_search_category)
+                        )
+                        if (state.canJumpPage) {
+                            TopBarTextActionButton(
+                                onClick = {
+                                    jumpPageInput = state.currentPage.toString()
+                                    showJumpPageDialog = true
+                                },
+                                text = state.currentPage.toString(),
+                                contentDescription = stringResource(R.string.explore_jump_page),
+                            )
+                        }
+                    },
+                    scrollBehavior = scrollBehavior
+                )
+            }
+        ) { paddingValues -> resultContent(paddingValues) }
+    }
+
+    if (showJumpPageDialog) {
+        val jumpPage = jumpPageInput.toIntOrNull()
+        AppAlertDialog(
+            show = true,
+            onDismissRequest = { showJumpPageDialog = false },
+            title = stringResource(R.string.explore_jump_page),
+            content = {
+                AppTextField(
+                    value = jumpPageInput,
+                    onValueChange = { input ->
+                        jumpPageInput = input.filter(Char::isDigit).take(4)
+                    },
+                    placeholder = { AppText(stringResource(R.string.explore_jump_page_hint)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+            },
+            confirmEnabled = jumpPage != null && jumpPage >= 1,
+            onConfirm = {
+                if (jumpPage != null && jumpPage >= 1) {
+                    onIntent(ExploreShowIntent.JumpToPage(jumpPage))
+                }
+                showJumpPageDialog = false
+            },
+        )
     }
 
     val previewShelfState = previewBook?.let { book ->

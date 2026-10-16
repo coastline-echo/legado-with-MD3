@@ -2,11 +2,14 @@ package io.legado.app.data.repository
 
 import android.app.Application
 import androidx.room.Room
+import androidx.room.withTransaction
 import io.legado.app.data.AppDatabase
+import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.readRecord.ReadRecord
 import io.legado.app.data.entities.readRecord.ReadRecordDetail
 import io.legado.app.data.entities.readRecord.ReadRecordSession
 import io.legado.app.help.config.AppConfigStore
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -17,6 +20,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -36,6 +41,27 @@ class ReadRecordRepositoryTest {
 
     @After
     fun tearDown() = database.close()
+
+    @Test
+    fun `per book recording switch persists without changing progress or affecting another copy`() = runBlocking {
+        repository.setReadRecordEnabled(true)
+        val first = Book(bookUrl = "https://first.example/book", name = targetName, author = author,
+            durChapterIndex = 7, durChapterPos = 43)
+        val second = first.copy(bookUrl = "https://second.example/book")
+        database.bookDao.insert(first, second)
+        val books = BookRepository(database.bookDao, database.bookChapterDao, database)
+        val disabled = books.setReadRecordDisabled(first.bookUrl, true)!!
+        assertEquals(true, disabled.disableReadRecord)
+        assertEquals(7, disabled.durChapterIndex)
+        assertEquals(43, disabled.durChapterPos)
+        repository.saveReadSession(session(first.bookUrl, 1_000, 1_200))
+        repository.saveReadSession(session(second.bookUrl, 2_000, 2_300))
+        assertEquals(listOf(second.bookUrl), database.readRecordDao.allSession.map { it.bookUrl })
+        assertEquals(false, books.setReadRecordDisabled(first.bookUrl, false)!!.disableReadRecord)
+        repository.saveReadSession(session(first.bookUrl, 3_000, 3_200))
+        assertEquals(2, database.readRecordDao.allSession.size)
+        assertEquals(500L, repository.getBookReadTime(targetName, author).first())
+    }
 
     @Test
     fun `merge accumulates target and source sessions`() = runBlocking {
@@ -204,6 +230,191 @@ class ReadRecordRepositoryTest {
         assertNull(database.readRecordDao.getDetail(deviceId, targetName, author, date))
         assertEquals(0, database.readRecordDao.getSessionsByBook(deviceId, targetName, author).size)
     }
+
+    @Test
+    fun `deleting one timeline session keeps other sessions for the same book`() = runBlocking {
+        val first = session(bookUrl = "https://book.example", start = 1_000, end = 11_000)
+        val second = session(bookUrl = "https://book.example", start = 1_311_000, end = 1_321_000)
+        val third = session(bookUrl = "https://book.example", start = 2_621_000, end = 2_631_000)
+        repository.saveReadSession(first)
+        repository.saveReadSession(second)
+        repository.saveReadSession(third)
+
+        assertEquals(true, repository.deleteSession(first))
+
+        val remaining = database.readRecordDao.getSessionsByBook(deviceId, targetName, author)
+        assertEquals(2, remaining.size)
+        assertEquals(setOf(1_311_000L, 2_621_000L), remaining.map { it.startTime }.toSet())
+    }
+
+    @Test
+    fun `deleting a merged timeline item removes only its continuous session group`() = runBlocking {
+        val first = session(bookUrl = "https://book.example", start = 1_000, end = 11_000)
+        val second = session(bookUrl = "https://book.example", start = 21_000, end = 31_000)
+        val separate = session(bookUrl = "https://book.example", start = 1_431_000, end = 1_441_000)
+        repository.saveReadSession(first)
+        repository.saveReadSession(second)
+        repository.saveReadSession(separate)
+
+        val mergedDisplayItem = database.readRecordDao.allSession.first { it.startTime == first.startTime }
+            .copy(endTime = second.endTime)
+        // 时间线保留首段的行 ID，但展示用 endTime 与数据库首段不同。
+        assertEquals(true, mergedDisplayItem.id > 0L)
+        assertEquals(true, mergedDisplayItem.endTime != first.endTime)
+        assertEquals(true, repository.deleteSession(mergedDisplayItem))
+
+        val remaining = database.readRecordDao.getSessionsByBook(deviceId, targetName, author)
+        assertEquals(listOf(1_431_000L), remaining.map { it.startTime })
+    }
+
+    @Test
+    fun `cross midnight session splits daily read time without splitting the session`() = runBlocking {
+        val zone = ZoneId.systemDefault()
+        val midnight = ZonedDateTime.of(2026, 9, 23, 0, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val record = session(bookUrl = "https://book.example", start = midnight - 120_000, end = midnight + 480_000)
+
+        repository.saveReadSession(record)
+
+        val previousDay = java.time.Instant.ofEpochMilli(record.startTime).atZone(zone).toLocalDate().toString()
+        val nextDay = java.time.Instant.ofEpochMilli(record.endTime).atZone(zone).toLocalDate().toString()
+        assertEquals(120_000L, database.readRecordDao.getDetail(deviceId, targetName, author, previousDay)?.readTime)
+        assertEquals(480_000L, database.readRecordDao.getDetail(deviceId, targetName, author, nextDay)?.readTime)
+        assertEquals(midnight, database.readRecordDao.getDetail(deviceId, targetName, author, nextDay)?.firstReadTime)
+        assertEquals(record.endTime, database.readRecordDao.getDetail(deviceId, targetName, author, nextDay)?.lastReadTime)
+        assertEquals(1, database.readRecordDao.getSessionsByBook(deviceId, targetName, author).size)
+    }
+
+    @Test
+    fun `deleting cross midnight session clears both daily details`() = runBlocking {
+        val zone = ZoneId.systemDefault()
+        val midnight = ZonedDateTime.of(2026, 9, 24, 0, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val record = session(bookUrl = "https://book.example", start = midnight - 120_000, end = midnight + 480_000)
+        repository.saveReadSession(record)
+
+        assertEquals(true, repository.deleteSession(database.readRecordDao.allSession.single()))
+
+        assertEquals(0, database.readRecordDao.allDetail.size)
+        assertEquals(0, database.readRecordDao.allSession.size)
+    }
+
+    @Test
+    fun `coexisting copies are timed independently while the work total is their sum`() =
+        runBlocking {
+            val copyA = "https://a.example/book"
+            val copyB = "https://b.example/book"
+            repository.saveReadSession(session(bookUrl = copyA, start = 1_000, end = 1_200))
+            repository.saveReadSession(session(bookUrl = copyB, start = 2_000, end = 2_300))
+
+            assertEquals(200L, repository.getBookCopyReadTime(copyA, targetName, author).first())
+            assertEquals(300L, repository.getBookCopyReadTime(copyB, targetName, author).first())
+            // 作品维度 = 两个副本之和
+            assertEquals(500L, repository.getBookReadTime(targetName, author).first())
+        }
+
+    @Test
+    fun `copy without owned session falls back to unowned legacy sessions`() = runBlocking {
+        val copyA = "https://a.example/book"
+        database.readRecordDao.insertSession(session(bookUrl = "", start = 1_000, end = 1_200))
+
+        assertEquals(200L, repository.getBookCopyReadTime(copyA, targetName, author).first())
+    }
+
+    @Test
+    fun `unowned legacy sessions leave both copies once a second copy exists`() = runBlocking {
+        val copyA = "https://a.example/book"
+        val copyB = "https://b.example/book"
+        // 走 saveReadSession，让汇总记录（作品维度）与会话一起建立
+        repository.saveReadSession(session(bookUrl = "", start = 1_000, end = 1_200))
+        database.bookDao.insert(Book(bookUrl = copyA, name = targetName, author = author))
+
+        // 作品只有一个副本时，未归属的历史时长算在它头上，避免升级后凭空消失
+        assertEquals(200L, repository.getBookCopyReadTime(copyA, targetName, author).first())
+
+        // 共存出第二个副本后，谁都不再显示，避免同一段历史在两个副本里各出现一次
+        database.bookDao.insert(Book(bookUrl = copyB, name = targetName, author = author))
+        assertEquals(0L, repository.getBookCopyReadTime(copyA, targetName, author).first())
+        assertEquals(0L, repository.getBookCopyReadTime(copyB, targetName, author).first())
+        // 作品维度始终保留这段历史
+        assertEquals(200L, repository.getBookReadTime(targetName, author).first())
+    }
+
+    @Test
+    fun `migrating a copy moves its sessions without doubling the total`() = runBlocking {
+        val oldBook = Book(bookUrl = "https://old.example/book", name = targetName, author = author)
+        val newBook = Book(bookUrl = "https://new.example/book", name = targetName, author = author)
+        database.readRecordDao.insertSession(
+            session(
+                bookUrl = oldBook.bookUrl,
+                start = 1_000,
+                end = 1_200
+            )
+        )
+        database.readRecordDao.insert(ReadRecord(deviceId, targetName, author, 200, 1_200))
+
+        database.withTransaction { repository.reassignBookReadSessions(oldBook, newBook) }
+
+        assertEquals(
+            200L,
+            repository.getBookCopyReadTime(newBook.bookUrl, targetName, author).first()
+        )
+        assertEquals(
+            0L,
+            repository.getBookCopyReadTime(oldBook.bookUrl, targetName, author).first()
+        )
+        assertEquals(
+            200L,
+            database.readRecordDao.getReadRecord(deviceId, targetName, author)?.readTime
+        )
+    }
+
+    @Test
+    fun `migrating to a renamed book moves the total instead of keeping an orphan`() = runBlocking {
+        val oldBook = Book(bookUrl = "https://old.example/book", name = targetName, author = author)
+        val newBook = Book(bookUrl = "https://new.example/book", name = sourceName, author = author)
+        val date = "1970-01-01"
+        database.readRecordDao.insertSession(
+            session(
+                bookUrl = oldBook.bookUrl,
+                start = 1_000,
+                end = 1_200
+            )
+        )
+        database.readRecordDao.insert(ReadRecord(deviceId, targetName, author, 200, 1_200))
+        database.readRecordDao.insertDetail(
+            ReadRecordDetail(deviceId, targetName, author, date, 200, 10, 1_000, 1_200)
+        )
+
+        database.withTransaction { repository.reassignBookReadSessions(oldBook, newBook) }
+
+        assertEquals(
+            200L,
+            repository.getBookCopyReadTime(newBook.bookUrl, sourceName, author).first()
+        )
+        assertNull(database.readRecordDao.getReadRecord(deviceId, targetName, author))
+        assertNull(database.readRecordDao.getDetail(deviceId, targetName, author, date))
+        assertEquals(
+            200L,
+            database.readRecordDao.getReadRecord(deviceId, sourceName, author)?.readTime
+        )
+        assertEquals(
+            200L,
+            database.readRecordDao.getDetail(deviceId, sourceName, author, date)?.readTime
+        )
+    }
+
+    private fun session(
+        bookUrl: String,
+        start: Long,
+        end: Long,
+    ) = ReadRecordSession(
+        deviceId = deviceId,
+        bookName = targetName,
+        bookAuthor = author,
+        bookUrl = bookUrl,
+        startTime = start,
+        endTime = end,
+        words = 10,
+    )
 
     private suspend fun mergeAndAssert(targetSessionDuration: Long = 0, sourceSessionDuration: Long = 0, targetLegacyTime: Long = 0, sourceLegacyTime: Long = 0) {
         val source = insertRecord(sourceName, sourceSessionDuration + sourceLegacyTime, sourceSessionDuration)

@@ -209,20 +209,19 @@ class AnalyzeRule(
             result = content
             if (result is NativeObject) {
                 val sourceRule = ruleList.first()
-                val originalRule = sourceRule.rule
-                val originalMode = sourceRule.mode
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result = if (sourceRule.getParamSize() > 1) {
+                result = when {
+                    // 快捷路径同样要按 mode 分发（与下方通用路径一致）：`@js:` 书源列表
+                    // 规则产出的 JS 对象条目上，`$.x` / `@js:xxx` 若被当字面量键名处理会
+                    // 返回空，BookList 丢掉空书名条目 → 书源校验把搜索/发现误判为失效。
+                    sourceRule.mode == Mode.Js -> evalJS(sourceRule.rule, result)
+                    sourceRule.mode == Mode.Json ->
+                        getAnalyzeByJSonPath(result).getStringList(sourceRule.rule)
                     // get {{}}
-                    sourceRule.rule
-                } else {
-                    // NativeObject 快捷路径也必须遵守规则模式，不能把 JSON/JS 规则当作普通键名。
-                    when (originalMode) {
-                        Mode.Js -> evalJS(originalRule, result)?.toString()
-                        Mode.Json -> getAnalyzeByJSonPath(GSON.toJson(result)).getStringList(originalRule)
-                        else -> result[sourceRule.rule]
-                    }
+                    sourceRule.getParamSize() > 1 -> sourceRule.rule
+                    // 键值直接访问
+                    else -> result[sourceRule.rule]
                 }
                 result?.let {
                     if (sourceRule.replaceRegex.isNotEmpty() && it is List<*>) {
@@ -314,22 +313,20 @@ class AnalyzeRule(
             result = content
             if (result is NativeObject) {
                 val sourceRule = ruleList.first()
-                val originalRule = sourceRule.rule
-                val originalMode = sourceRule.mode
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result = if (sourceRule.getParamSize() > 1) {
+                result = when {
+                    // 与 getStringList 同理：JS 对象条目必须按 mode 分发，否则 `$.name`
+                    // 与 `@js:xxx` 都会被当字面量键名而返回空串。
+                    sourceRule.mode == Mode.Js -> evalJS(sourceRule.rule, result)
+                    sourceRule.mode == Mode.Json ->
+                        getAnalyzeByJSonPath(result).getString(sourceRule.rule)
                     // get {{}}
-                    sourceRule.rule
-                } else {
-                    // NativeObject 快捷路径也必须遵守规则模式。
-                    when (originalMode) {
-                        Mode.Js -> evalJS(originalRule, result)?.toString()
-                        Mode.Json -> getAnalyzeByJSonPath(GSON.toJson(result)).getString(originalRule)
-                        else -> result[sourceRule.rule]?.toString()
-                    }
+                    sourceRule.getParamSize() > 1 -> sourceRule.rule
+                    // 键值直接访问
+                    else -> result[sourceRule.rule]?.toString()
                 }?.let {
-                    replaceRegex(it, sourceRule)
+                    replaceRegex(it.toString(), sourceRule)
                 }
             } else if (result is LinkedTreeMap<*, *>) {
                 result = result[ruleList.first().rule]?.toString()

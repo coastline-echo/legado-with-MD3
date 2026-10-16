@@ -11,7 +11,9 @@ import io.legado.app.constant.ReadMenuBlurStyle
 import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.domain.model.settings.ReadSettings
 import io.legado.app.help.config.AppConfigStore
+import io.legado.app.help.config.compatDsString
 import io.legado.app.help.config.compatDsValue
+import io.legado.app.help.config.rawPrefValue
 import io.legado.app.utils.GSON
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,10 +95,10 @@ class ReadSettingsRepository(
         settingsRepository.putBoolean(PreferKey.useZhLayout, value)
 
     suspend fun setShowBrightnessView(value: String) =
-        settingsRepository.putString(PreferKey.showBrightnessView, value)
+        settingsRepository.putString(PreferKey.readBrightnessMode, value)
 
     suspend fun setBrightnessVwPos(value: String) =
-        settingsRepository.putString(PreferKey.brightnessVwPos, value)
+        settingsRepository.putString(PreferKey.readBrightnessControlPosition, value)
 
     suspend fun setReadBrightness(value: Int) =
         settingsRepository.putInt(PreferKey.brightness, value)
@@ -371,8 +373,16 @@ class ReadSettingsRepository(
             textBottomJustify = compatDsValue(Keys.TextBottomJustify, true),
             adaptSpecialStyle = compatDsValue(Keys.AdaptSpecialStyle, true),
             useZhLayout = compatDsValue(Keys.UseZhLayout, false),
-            showBrightnessView = compatDsValue(Keys.ShowBrightnessView, "0"),
-            brightnessVwPos = compatDsValue(Keys.BrightnessVwPos, "1"),
+            showBrightnessView = compatDsString(PreferKey.readBrightnessMode)
+                ?: (rawPrefValue(PreferKey.showBrightnessView) as? String)
+                ?: "0",
+            brightnessVwPos = compatDsString(PreferKey.readBrightnessControlPosition)
+                ?: when (val legacy = rawPrefValue(PreferKey.brightnessVwPos)) {
+                    is String -> legacy
+                    is Boolean -> if (legacy) "1" else "0"
+                    else -> null
+                }
+                ?: "1",
             readBrightness = compatDsValue(Keys.ReadBrightness, 100),
             brightnessAuto = compatDsValue(Keys.BrightnessAuto, true),
             useUnderline = compatDsValue(Keys.UseUnderline, false),

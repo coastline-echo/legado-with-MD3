@@ -72,5 +72,16 @@ internal fun normalizeConfigMapWithReport(
             }
         }
     }
+    mapOf(
+        PreferKey.showBrightnessView to PreferKey.readBrightnessMode,
+        PreferKey.brightnessVwPos to PreferKey.readBrightnessControlPosition,
+    ).forEach { (legacyKey, newKey) ->
+        if (newKey !in map && keyIsNotIgnore(newKey)) {
+            when (val legacy = map[legacyKey]) {
+                is String -> finalMap[newKey] = legacy
+                is Boolean -> finalMap[newKey] = if (legacy) "1" else "0"
+            }
+        }
+    }
     return RestoreConfigNormalization(finalMap, ignoredKeys, unsupportedKeys, decryptionFailedKeys)
 }

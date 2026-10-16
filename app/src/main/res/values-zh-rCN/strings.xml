@@ -3491,4 +3491,4 @@
     <string name="backup_local_result_failed">本地备份：失败</string>
     <string name="backup_webdav_result_success">WebDAV 上传：成功</string>
     <string name="backup_webdav_result_failed">WebDAV 备份：失败</string>
-</resources>
+\n\n</resources>

@@ -5,6 +5,7 @@ import io.legado.app.domain.gateway.AiStreamEvent
 import io.legado.app.domain.model.AiAvailableModel
 import io.legado.app.domain.model.AiGenerateRequest
 import io.legado.app.domain.model.AiGenerateResponse
+import io.legado.app.domain.model.AiHttpException
 import io.legado.app.domain.model.AiMessage
 import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiProtocol
@@ -68,14 +69,17 @@ class OpenAiChatHandler : AiProtocolHandler {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val json = GSON.fromJson(response.body, OpenAiChatResponse::class.java)
             val message = json?.choices?.firstOrNull()?.message
@@ -124,14 +128,17 @@ class OpenAiChatHandler : AiProtocolHandler {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }.also {
                 if (!it.isSuccessful) {
-                    throw Exception("HTTP ${it.code}: ${it.message}")
+                    throw AiHttpException(it.code, it.httpErrorMessage())
                 }
             }
         }
@@ -182,14 +189,17 @@ class OpenAiChatHandler : AiProtocolHandler {
             val response = okHttpClient.newCallStrResponse {
                 url(modelsUrl)
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = null,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val json = GSON.fromJson(response.body, OpenAiModelsResponse::class.java)
             json?.data.toAvailableModels()
@@ -210,12 +220,20 @@ internal fun MutableMap<String, Any?>.applyZhipuThinking(
     val identity = "${provider.id} ${provider.name} ${provider.baseUrl}".lowercase()
     val isZhipuProvider = "zhipu" in identity || "bigmodel" in identity
     val isGlmModel = modelId.lowercase().startsWith("glm-")
-    if (isZhipuProvider || isGlmModel) {
-        this["thinking"] = mapOf(
-            "type" to if (reasoningLevel == AiReasoningLevel.OFF) "disabled" else "enabled"
-        )
-    }
+    if (!isZhipuProvider && !isGlmModel) return
+    // GLM-5.3 系列官方标注为强制思考，thinking.type=disabled 会被拒绝；想关只能不发这个参数。
+    if (reasoningLevel == AiReasoningLevel.OFF && isAlwaysThinkingGlm(modelId)) return
+    this["thinking"] = mapOf(
+        "type" to if (reasoningLevel == AiReasoningLevel.OFF) "disabled" else "enabled"
+    )
 }
+
+/**
+ * GLM-5.3 / GLM-5.3-Flash 强制思考，无法通过 thinking.type 关闭（z.ai 文档），
+ * 对这些模型发 disabled 只会换回一个错误响应。
+ */
+internal fun isAlwaysThinkingGlm(modelId: String): Boolean =
+    modelId.lowercase().startsWith("glm-5.3")
 
 // ---- Message & tool format converters ----
 

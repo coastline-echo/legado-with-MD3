@@ -23,13 +23,15 @@ fun ConfigNavScreen(
     onBackClick: () -> Unit,
     onNavigateToOther: () -> Unit,
     onNavigateToRead: () -> Unit,
+    onNavigateToReadAloud: () -> Unit,
     onNavigateToCover: () -> Unit,
     onNavigateToTheme: () -> Unit,
     onNavigateToBackup: () -> Unit,
     onNavigateToAi: () -> Unit,
     onNavigateToDownloadCache: () -> Unit,
     onNavigateToTranslation: () -> Unit,
-    onNavigateToLab: () -> Unit
+    onNavigateToLab: () -> Unit,
+    onNavigateToPrivate: () -> Unit
 ) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
 
@@ -67,6 +69,11 @@ fun ConfigNavScreen(
                         onClick = onNavigateToRead
                     )
                     ClickableSettingItem(
+                        title = stringResource(R.string.aloud_config),
+                        description = stringResource(R.string.multi_role_rule_summary),
+                        onClick = onNavigateToReadAloud
+                    )
+                    ClickableSettingItem(
                         title = stringResource(R.string.cover_config),
                         onClick = onNavigateToCover
                     )
@@ -85,6 +92,10 @@ fun ConfigNavScreen(
                     ClickableSettingItem(
                         title = stringResource(R.string.translation_config),
                         onClick = onNavigateToTranslation
+                    )
+                    ClickableSettingItem(
+                        title = stringResource(R.string.privacy),
+                        onClick = onNavigateToPrivate
                     )
                     ClickableSettingItem(
                         title = stringResource(R.string.lab_setting),

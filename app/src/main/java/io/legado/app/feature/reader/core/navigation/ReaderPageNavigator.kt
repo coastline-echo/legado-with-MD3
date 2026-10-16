@@ -2,8 +2,8 @@ package io.legado.app.feature.reader.core.navigation
 
 import io.legado.app.feature.reader.core.model.ReaderElement
 import io.legado.app.feature.reader.core.model.ReaderPage
+import io.legado.app.feature.reader.core.model.ReaderPageId
 import io.legado.app.feature.reader.core.model.ReaderPageWindow
-import io.legado.app.feature.reader.core.navigation.ReaderPageNavigator.locate
 
 data class ReaderNavigationResult(
     val pageIndex: Int,
@@ -28,6 +28,28 @@ data class ReaderPageContext(
 )
 
 object ReaderPageNavigator {
+    /** Page-table insertions, removals and same-id replacements must not reuse an old index. */
+    fun rebasePageIndex(pages: List<ReaderPage>, previousPageId: ReaderPageId?): Int? =
+        previousPageId?.let { id -> pages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
+
+    /** Retain adjacent chapter layouts and the displayed chapter during a loading handoff. */
+    fun retainChapterWindow(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        displayedChapterIndex: Int?,
+    ): List<ReaderPage> = pages.filter {
+        it.id.chapterIndex in chapterIndex - 1..chapterIndex + 1 ||
+                it.id.chapterIndex == displayedChapterIndex
+    }
+
+    /** Keep a synchronous turn result visible until the host acknowledges or replaces it. */
+    fun resolveWindow(
+        host: ReaderPageWindow,
+        pendingBase: ReaderPageWindow?,
+        pending: ReaderPageWindow?,
+    ): ReaderPageWindow =
+        if (pending != null && (host === pendingBase || host === pending || (pendingBase?.current != null && host.current?.id == pendingBase.current.id))) pending else host
+
     fun bodyParagraphAt(pages: List<ReaderPage>, chapterIndex: Int, chapterPosition: Int): Int? = pages
         .asSequence()
         .filter { it.id.chapterIndex == chapterIndex }
@@ -52,6 +74,10 @@ object ReaderPageNavigator {
      * 章节边界占位语义（对照 shutiao 的"正在加载中"页）：当前真实页的邻章在书中
      * 存在但尚未分页进 [pages] 时，需要预置占位页，让手势层在邻章未装载时也能把
      * 页面拖/滚进"加载中"。占位页本身不再扩展（装载完成前是死端）。
+     *
+     * 判定不看邻章正文是否已缓存：旧 View `TextPageFactory.nextPage/prevPage` 在邻章
+     * 还没有页时一律给出 `R.string.data_loading` 兜底页，而"正文已缓存、只差排版"恰恰
+     * 是最容易读到章末的窗口——缺了占位页，章末残页下方就没有任何页面承接。
      */
     fun missingAdjacentChapters(
         pages: List<ReaderPage>,
@@ -64,6 +90,16 @@ object ReaderPageNavigator {
             chapter in 0 until chapterCount && pages.none { it.id.chapterIndex == chapter }
         }
     }
+
+    /**
+     * 章末第三槽（`ReaderPageWindow.nextPlus`）是否需要"继续滑动以加载下一章…"兜底页，
+     * 对照旧 View `TextPageFactory.nextPlusPage`：本章最后一页的下一章还没有第二页
+     * （只有一页，或该章还没排完）时，旧实现用 `R.string.keep_swipe_tip` 的提示页占住
+     * 第三槽；书末没有下一章也就不需要提示页。滚动模式会把第三槽画出来，缺了它章末
+     * 连续滑动会先看到一段没有页面的空档。
+     */
+    fun needsSwipeTipNextPlus(window: ReaderPageWindow, hasNextChapter: Boolean): Boolean =
+        hasNextChapter && window.next != null && window.nextPlus == null
 
     fun move(pages: List<ReaderPage>, pageIndex: Int, delta: Int): ReaderNavigationResult {
         if (pages.isEmpty()) return ReaderNavigationResult(0, ReaderPageWindow(), true)
@@ -104,6 +140,44 @@ object ReaderPageNavigator {
 
     fun locate(pages: List<ReaderPage>, chapterIndex: Int, chapterPosition: Int): Int =
         locateOrNull(pages, chapterIndex, chapterPosition) ?: 0
+
+    /** A streamed last page cannot stand in for a saved position that has not been laid out yet. */
+    fun locateReadyPage(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        chapterPosition: Int,
+        chapterStreaming: Boolean,
+    ): Int? {
+        val index = locateOrNull(pages, chapterIndex, chapterPosition) ?: return null
+        val hasFollowingPage = pages.getOrNull(index + 1)?.id?.chapterIndex == chapterIndex
+        return index.takeIf {
+            !chapterStreaming || hasFollowingPage || containsChapterPosition(
+                pages[index],
+                chapterPosition
+            )
+        }
+    }
+
+    /** Body positions are half-open; titles use a separate coordinate space. */
+    fun containsChapterPosition(page: ReaderPage, chapterPosition: Int): Boolean {
+        val ranges = page.elements.mapNotNull(::elementRange)
+        val start = ranges.minOfOrNull { it.first } ?: return false
+        val endInclusive = ranges.maxOf { it.last }
+        return chapterPosition in start..endInclusive
+    }
+
+    /**
+     * Pagination may finish for a chapter that is no longer current. Follow the reading
+     * anchor, or keep the previously visible page while the current chapter is still loading.
+     * Page identity is required for the fallback: inserting preceding pages changes indexes.
+     */
+    fun locateAfterPagination(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        chapterPosition: Int,
+        previousPageId: ReaderPageId?,
+    ): Int? = locateOrNull(pages, chapterIndex, chapterPosition)
+        ?: previousPageId?.let { id -> pages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
 
     fun chapterPosition(pages: List<ReaderPage>, pageIndex: Int): ReaderChapterPagePosition? {
         val page = pages.getOrNull(pageIndex) ?: return null
@@ -160,6 +234,12 @@ object ReaderPageNavigator {
         )
     }
 
+    /**
+     * 页首章内位置。**排除标题元素**：新模型的标题与正文是两套独立坐标（见 [ReaderSelection]
+     * 的 anchorIsTitle 说明），把标题位置当成正文页首会把书签/朗读定位拖进标题坐标空间。
+     * 旧 View 的 `TextPage.chapterPosition = textLines.first().chapterPosition` 建立在两者同空间的
+     * 前提上，迁移后不再等价。
+     */
     fun pageStart(page: ReaderPage): Int = page.elements.mapNotNull(::elementRange)
         .minOfOrNull { it.first } ?: 0
 
