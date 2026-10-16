@@ -14,9 +14,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.legado.app.R
@@ -26,7 +31,7 @@ import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.button.PrimaryButton
-import io.legado.app.ui.widget.components.button.SecondaryButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.checkBox.CheckboxItem
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
@@ -44,13 +49,18 @@ internal fun RestorePreviewScreen(
         if (preview.mode == RestoreMode.CLEAR_THEN_RESTORE) emptySet()
         else preview.preview.missingCategories).distinct().sorted()
     val selectedCount = categories.count { it in preview.selectedCategories }
+    val attentionCategories = (preview.preview.emptyCategories +
+        preview.preview.missingCategories +
+        preview.preview.backupIgnoredCategories +
+        preview.preview.restoreIgnoredCategories).distinct().sorted()
+    var attentionExpanded by rememberSaveable(preview.uri, preview.mode) { mutableStateOf(false) }
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     AppScaffold(
         topBar = {
             GlassMediumFlexibleTopAppBar(
                 title = stringResource(R.string.restore_preview_title),
                 scrollBehavior = scrollBehavior,
-                navigationIcon = { TopBarNavigationButton { onIntent(BackupConfigIntent.CloseRestorePreview) } },
+                navigationIcon = { TopBarNavigationButton(onClick = { onIntent(BackupConfigIntent.CloseRestorePreview) }) },
             )
         },
         bottomBar = {
@@ -58,11 +68,15 @@ internal fun RestorePreviewScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                SecondaryButton(
-                    text = stringResource(R.string.cancel),
+                FilledTonalButton(
                     onClick = { onIntent(BackupConfigIntent.CloseRestorePreview) },
                     modifier = Modifier.weight(1f),
-                )
+                ) {
+                    Text(
+                        text = stringResource(R.string.cancel),
+                        style = LegadoTheme.typography.labelLarge,
+                    )
+                }
                 PrimaryButton(
                     text = stringResource(R.string.restore),
                     enabled = selectedCount > 0,
@@ -90,43 +104,76 @@ internal fun RestorePreviewScreen(
             ),
         ) {
             item {
-                Text(
-                    text = if (preview.networkName == null) stringResource(R.string.backup_source_local)
-                    else stringResource(R.string.restore_preview_source_webdav, preview.networkName),
-                    color = LegadoTheme.colorScheme.onSurfaceVariant,
+                Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.restore_result_source,
+                            if (preview.networkName == null) stringResource(R.string.backup_source_local)
+                            else stringResource(R.string.restore_preview_source_webdav, preview.networkName),
+                        ),
+                        color = LegadoTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.restore_preview_mode, restoreModeTitle(preview.mode)),
+                    color = LegadoTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
                 Text(
                     text = stringResource(R.string.restore_preview_selected_summary, selectedCount, categories.size),
                     color = LegadoTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
-                if (preview.preview.warnings.isNotEmpty()) {
+                if (preview.mode == RestoreMode.CLEAR_THEN_RESTORE) {
                     Text(
-                        text = stringResource(R.string.restore_preview_warning_count, preview.preview.warnings.size),
+                        text = stringResource(R.string.restore_strategy_replace_desc),
                         color = LegadoTheme.colorScheme.error,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
-                if (preview.preview.emptyCategories.isNotEmpty()) {
+                if (preview.preview.warnings.isNotEmpty() || attentionCategories.isNotEmpty()) {
                     Text(
                         text = stringResource(
-                            R.string.restore_preview_empty_categories,
-                            restoreCategoryTitles(preview.preview.emptyCategories),
+                            R.string.restore_preview_attention_summary,
+                            attentionCategories.size,
+                            preview.preview.warnings.size,
                         ),
-                        color = LegadoTheme.colorScheme.onSurfaceVariant,
+                        color = LegadoTheme.colorScheme.error,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
-                }
-                if (preview.preview.missingCategories.isNotEmpty()) {
-                    Text(
+                    MediumTonalButton(
                         text = stringResource(
-                            R.string.restore_preview_missing_categories,
-                            restoreCategoryTitles(preview.preview.missingCategories),
+                            if (attentionExpanded) R.string.restore_preview_attention_collapse
+                            else R.string.restore_preview_attention_view,
                         ),
-                        color = LegadoTheme.colorScheme.onSurfaceVariant,
+                        onClick = { attentionExpanded = !attentionExpanded },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
+                    if (attentionExpanded) {
+                        if (preview.preview.emptyCategories.isNotEmpty()) Text(
+                            text = stringResource(R.string.restore_preview_empty_categories, restoreCategoryTitles(preview.preview.emptyCategories)),
+                            color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        if (preview.preview.missingCategories.isNotEmpty()) Text(
+                            text = stringResource(R.string.restore_preview_missing_categories, restoreCategoryTitles(preview.preview.missingCategories)),
+                            color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        if (preview.preview.backupIgnoredCategories.isNotEmpty()) Text(
+                            text = stringResource(R.string.restore_preview_backup_ignored, restoreCategoryTitles(preview.preview.backupIgnoredCategories)),
+                            color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        if (preview.preview.restoreIgnoredCategories.isNotEmpty()) Text(
+                            text = stringResource(R.string.restore_preview_restore_ignored, restoreCategoryTitles(preview.preview.restoreIgnoredCategories)),
+                            color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
                 }
                 if (preview.preview.sensitiveIncluded && !preview.preview.weakProtection) {
                     AppTextField(
@@ -169,12 +216,7 @@ internal fun RestorePreviewScreen(
                     )
                     if (preview.mode == RestoreMode.BY_CATEGORY && available) {
                         val categoryMode = preview.categoryModes[category] ?: RestoreMode.KEEP_APPLICATION
-                        Text(
-                            text = stringResource(
-                                if (categoryMode == RestoreMode.USE_BACKUP) R.string.restore_category_use_backup
-                                else R.string.restore_category_keep_application,
-                            ),
-                            color = LegadoTheme.colorScheme.primary,
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(start = 52.dp, end = 12.dp, bottom = 8.dp)
@@ -188,10 +230,42 @@ internal fun RestorePreviewScreen(
                                     ))
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    if (categoryMode == RestoreMode.USE_BACKUP) {
+                                        R.string.restore_category_use_backup
+                                    } else {
+                                        R.string.restore_category_keep_application
+                                    },
+                                ),
+                                color = LegadoTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = stringResource(
+                                    if (categoryMode == RestoreMode.USE_BACKUP) {
+                                        R.string.restore_use_backup_content_desc
+                                    } else {
+                                        R.string.restore_keep_application_desc
+                                    },
+                                ),
+                                style = LegadoTheme.typography.bodySmall,
+                                color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun restoreModeTitle(mode: RestoreMode): String = stringResource(
+    when (mode) {
+        RestoreMode.KEEP_APPLICATION -> R.string.restore_strategy_merge
+        RestoreMode.BY_CATEGORY -> R.string.restore_strategy_by_category
+        RestoreMode.CLEAR_THEN_RESTORE -> R.string.restore_strategy_replace
+        RestoreMode.USE_BACKUP -> R.string.restore_strategy_merge
+    }
+)

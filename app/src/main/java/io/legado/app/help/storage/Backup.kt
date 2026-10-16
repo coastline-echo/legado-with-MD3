@@ -509,13 +509,13 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
             "bookshelf" to "书架", "bookmark" to "书签与划线", "bookGroup" to "书籍分组",
             "bookSource" to "书源", "rssSource" to "RSS 源", "rssStar" to "RSS 收藏",
             "replaceRule" to "替换规则", "searchHistory" to "搜索历史", "readRecord" to "阅读记录",
-            "server" to "服务器", "sourceSub" to "书源订阅", "txtTocRule" to "文本目录规则",
-            "httpTTS" to "HTTP TTS", "keyboardAssists" to "键盘辅助", "dictRule" to "字典规则",
-            "homepageModules" to "首页模块", "homepageCustomSets" to "首页自定义布局",
-            "highlightRule" to "高亮规则", "highlightTagRule" to "高亮标签规则", "tagGroupRule" to "标签分组",
-            "settings" to "应用设置", "readConfig" to "阅读内容设置", "themeConfig" to "主题与外观",
-            "coverConfig" to "封面配置", "directLinkUploadRule" to "直链上传", "resources" to "背景资源",
-            "readSettings" to "阅读界面设置",
+            "server" to "Web 服务配置", "sourceSub" to "书源订阅规则", "txtTocRule" to "文本目录规则",
+            "httpTTS" to "在线朗读引擎（HTTP TTS）", "keyboardAssists" to "键盘辅助按键", "dictRule" to "字典规则",
+            "homepageModules" to "主页模块", "homepageCustomSets" to "主页自定义布局",
+            "highlightRule" to "高亮规则", "highlightTagRule" to "高亮标签规则", "tagGroupRule" to "标签分组规则",
+            "settings" to "应用设置", "readConfig" to "阅读器内容与排版设置", "themeConfig" to "主题与外观设置",
+            "coverConfig" to "封面生成规则", "directLinkUploadRule" to "直链上传规则", "resources" to "背景图片与界面资源",
+            "readSettings" to "阅读界面与操作设置",
         )
         val categoryStatusDetails = categoryStatus.mapValues { (category, status) ->
             when (status) {
@@ -747,6 +747,7 @@ sensitiveItems = buildSet {
             val notBackedCategories = com.google.gson.JsonArray()
             manifest.categories.forEach { category ->
                 val item = readableItem(category.name, category.status, category.detail)
+                item.addProperty("数量", category.count)
                 if (category.status == "已备份") {
                     backedCategories.add(item)
                 } else {
@@ -767,7 +768,10 @@ sensitiveItems = buildSet {
         }
         val manifestFile = FileUtils.createFileIfNotExist(backupPath + File.separator + "manifest.json")
         manifestFile.writeText(GSON.toJson(readableManifest))
-        val integrity = manifest.technical.copy(manifestSha256 = manifestFile.sha256())
+        val integrity = manifest.integrity.copy(
+            manifestSha256 = manifestFile.sha256(),
+            recovery = manifest.technical,
+        )
         FileUtils.createFileIfNotExist(backupPath + File.separator + "integrity.json")
             .writeText(GSON.toJson(integrity))
         BackupRestoreProgressBus.emit(BackupRestoreProgress(operationId, BackupRestoreStage.GENERATE_MANIFEST, filesForManifest.size, filesForManifest.size))
@@ -847,9 +851,7 @@ BackupRestoreResultBus.emit(
                 notSetConfigKeyNames = configIntegrity.notSet,
                 backupCategoryStatus = manifest.categories.associate { it.id to it.status },
                 backupCategoryLabels = manifest.categories.associate { it.id to it.name },
-                backupCategoryCounts = manifest.technical.categoryCounts.ifEmpty {
-                    manifest.categories.associate { it.id to it.count }
-                },
+                backupCategoryCounts = manifest.categories.associate { it.id to it.count },
                 backupCategoryStatusDetails = manifest.categories.associate { it.id to it.detail },
                 backupEmptyCategories = manifest.categories.filter { it.files.isNotEmpty() && it.count == 0 }
                     .mapTo(linkedSetOf<String>()) { it.id },
@@ -1087,6 +1089,7 @@ webDavUploadAttempted = webDavUploadAttempted,
         val themePackagePaths = ThemeConfigStore.configList.mapNotNull { it.backgroundImgPath }
         val files = mutableListOf<File>()
         val warnings = mutableListOf<String>()
+        val failedReferences = linkedSetOf<String>()
         fun copyPath(path: String) {
             val normalizedPath = path.trim()
             if (normalizedPath.startsWith("content://", ignoreCase = true)) {
@@ -1120,11 +1123,13 @@ webDavUploadAttempted = webDavUploadAttempted,
                     } ?: run {
                         val warning = "备份背景图片失败：无法读取 content:// 资源"
                         warnings += warning
+                        failedReferences += normalizedPath
                         AppLog.put(warning)
                     }
                 } catch (e: Exception) {
                     val warning = "备份背景图片失败：content:// 资源处理异常"
                     warnings += warning
+                    failedReferences += normalizedPath
                     AppLog.put(warning, e)
                 }
                 return
@@ -1138,6 +1143,7 @@ webDavUploadAttempted = webDavUploadAttempted,
             }
             if (!source.isFile) {
                 warnings += "备份背景图片失败：背景文件不存在"
+                failedReferences += normalizedPath
                 return
             }
             val hash = source.sha256()
@@ -1145,11 +1151,14 @@ webDavUploadAttempted = webDavUploadAttempted,
                 ?.let { ".${it.lowercase(Locale.ROOT)}" } ?: ""
             val target = File(targetDir, "$hash$extension")
             if (!target.exists()) source.copyTo(target, overwrite = false)
-            aliases[source.name] = "assets/background/${target.name}"
+            // 配置中可能保存完整绝对路径，不能只用文件名作为别名，
+            // 否则恢复替换后会残留旧目录前缀，导致设置仍指向不存在的路径。
+            aliases[normalizedPath] = "assets/background/${target.name}"
             if (files.none { it.name == target.name }) files += target
         }
         (readStyleGateway.allBackgroundImagePaths() + configuredPaths + themePackagePaths)
             .distinct().forEach(::copyPath)
+        clearResourceReferences(File(rootPath), failedReferences)
         return Triple(files, aliases, warnings)
     }
 
@@ -1171,6 +1180,7 @@ webDavUploadAttempted = webDavUploadAttempted,
         val files = mutableListOf<File>()
         val aliases = linkedMapOf<String, String>()
         val warnings = mutableListOf<String>()
+        val failedReferences = linkedSetOf<String>()
         targets.forEach { (kind, paths) ->
             val targetDir = File(rootPath, "assets/$kind").apply { mkdirs() }
             paths.distinct().forEach { path ->
@@ -1179,6 +1189,7 @@ webDavUploadAttempted = webDavUploadAttempted,
                 val source = if (isContentUri) null else File(normalized)
                 if (source != null && !source.isFile) {
                     warnings += "备份阅读页资源失败：文件不存在"
+                    failedReferences += normalized
                     return@forEach
                 }
                 runCatching {
@@ -1212,11 +1223,34 @@ webDavUploadAttempted = webDavUploadAttempted,
                     }
                 }.onFailure {
                     warnings += "备份阅读页资源失败：无法复制文件"
+                    failedReferences += normalized
                     AppLog.put("备份阅读页资源失败：$path\n${it.localizedMessage}", it)
                 }
             }
         }
+        clearResourceReferences(File(rootPath), failedReferences)
         return Triple(files, aliases, warnings)
+    }
+
+    /** 只清理备份暂存副本中的失效引用，不修改用户设备上的原始配置。 */
+    private fun clearResourceReferences(root: File, references: Set<String>) {
+        if (references.isEmpty()) return
+        val configFileNames = setOf(
+            "config.xml", ReadBookConfig.configFileName, ReadBookConfig.shareConfigFileName,
+            ThemeConfigStore.configFileName, "readSettings.json", "highlightRule.json",
+            "highlightTagRule.json", "tagGroupRule.json",
+        )
+        configFileNames.map { File(root, it) }.filter(File::isFile).forEach { file ->
+            var text = file.readText()
+            references.forEach { reference ->
+                val escapedXml = reference.replace("&", "&amp;")
+                    .replace("<", "&lt;").replace(">", "&gt;")
+                    .replace("\"", "&quot;").replace("'", "&apos;")
+                text = text.replace(reference, "")
+                    .let { value -> if (file.extension == "xml") value.replace(escapedXml, "") else value }
+            }
+            file.writeText(text)
+        }
     }
 
     private fun resourceRelativeName(root: File, file: File): String =

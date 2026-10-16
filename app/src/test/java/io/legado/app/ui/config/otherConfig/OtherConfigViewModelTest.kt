@@ -231,6 +231,8 @@ class OtherConfigViewModelTest {
     private class FakeLocalPasswordGateway : LocalPasswordGateway {
         var savedPassword: String? = null
 
+        override suspend fun hasPassword(): Boolean = !savedPassword.isNullOrBlank()
+
         override suspend fun setPassword(password: String?) {
             savedPassword = password
         }

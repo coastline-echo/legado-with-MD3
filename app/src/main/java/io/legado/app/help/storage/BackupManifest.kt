@@ -4,7 +4,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
 
-/** 当前备份 ZIP 清单的格式版本。发生不兼容的清单结构变化时递增。 */
+/** 备份 ZIP 清单和完整性文件的格式标识。 */
 const val BACKUP_MANIFEST_FORMAT_VERSION = 1
 const val BACKUP_INTEGRITY_FORMAT_VERSION = 1
 
@@ -17,12 +17,13 @@ data class BackupManifest(
     val categories: List<BackupManifestCategory> = emptyList(),
     val configItems: List<BackupManifestConfigItem> = emptyList(),
     val sensitiveCategories: List<BackupManifestSensitiveCategory> = emptyList(),
+    val integrity: BackupIntegrity = BackupIntegrity(),
     val technical: BackupManifestTechnical = BackupManifestTechnical(),
 )
 
-val BackupManifest.files: List<BackupManifestFile> get() = technical.files
-val BackupManifest.resources: List<BackupManifestResource> get() = technical.resources
-val BackupManifest.resourceAliases: Map<String, String> get() = technical.resourceAliases
+val BackupManifest.files: List<BackupManifestFile> get() = integrity.files
+val BackupManifest.resources: List<BackupManifestResource> get() = integrity.resources
+val BackupManifest.resourceAliases: Map<String, String> get() = integrity.resourceAliases
 val BackupManifest.ignoredCategories: Set<String> get() = technical.ignoredCategories
 val BackupManifest.restoreIgnoredCategories: Set<String> get() = technical.restoreIgnoredCategories
 val BackupManifest.sensitiveIncluded: Boolean get() = technical.sensitiveIncluded
@@ -30,26 +31,30 @@ val BackupManifest.sensitiveItems: Set<String> get() = technical.sensitiveItems
 val BackupManifest.weakProtection: Boolean get() = technical.weakProtection
 val BackupManifest.warnings: List<String> get() = technical.warnings
 
-/** 同一清单中的技术校验与恢复辅助数据，与用户可读项目分开存放。 */
+/** 清单中的恢复辅助数据，与用户可读项目分开存放。 */
 data class BackupManifestTechnical(
-    /** 校验文件自身的结构版本，与用户清单格式版本独立维护。 */
-    val integrityVersion: Int = 1,
-    /** 用户清单的摘要，用于发现清单在传输或解压过程中被修改。 */
-    val manifestSha256: String = "",
     val configItems: List<BackupManifestConfigItem> = emptyList(),
-    val categoryLabels: Map<String, String> = emptyMap(),
-    val sensitiveCategoryLabels: Map<String, String> = emptyMap(),
-    val categoryCounts: Map<String, Int> = emptyMap(),
+    /** 用户清单不展示的稳定类别标识，仅用于恢复定位。 */
+    val categoryIds: Map<String, String> = emptyMap(),
+    val sensitiveCategoryIds: Map<String, String> = emptyMap(),
+    /** 类别与 ZIP 文件的归属关系，避免恢复时按文件名猜类别。 */
     val categoryFiles: Map<String, List<String>> = emptyMap(),
-    val files: List<BackupManifestFile> = emptyList(),
-    val resources: List<BackupManifestResource> = emptyList(),
-    val resourceAliases: Map<String, String> = emptyMap(),
     val ignoredCategories: Set<String> = emptySet(),
     val restoreIgnoredCategories: Set<String> = emptySet(),
     val sensitiveIncluded: Boolean = false,
     val sensitiveItems: Set<String> = emptySet(),
     val weakProtection: Boolean = false,
     val warnings: List<String> = emptyList(),
+)
+
+/** integrity.json 的专用模型，只保存完整性校验和资源恢复数据。 */
+data class BackupIntegrity(
+    val integrityVersion: Int = BACKUP_INTEGRITY_FORMAT_VERSION,
+    val manifestSha256: String = "",
+    val files: List<BackupManifestFile> = emptyList(),
+    val resources: List<BackupManifestResource> = emptyList(),
+    val resourceAliases: Map<String, String> = emptyMap(),
+    val recovery: BackupManifestTechnical = BackupManifestTechnical(),
 )
 
 data class BackupManifestCategory(
@@ -135,15 +140,16 @@ object BackupManifestBuilder {
             categories = categories.toList(),
             sensitiveCategories = sensitiveCategories.toList(),
             configItems = sortedConfigItems.map { BackupManifestConfigItem(name = it.name, status = it.status) },
-            technical = BackupManifestTechnical(
-                configItems = sortedConfigItems,
-                categoryLabels = categories.associate { it.id to it.name },
-                sensitiveCategoryLabels = sensitiveCategories.associate { it.id to it.name },
-                categoryCounts = categories.associate { it.id to it.count },
-                categoryFiles = categories.associate { it.id to it.files },
+            integrity = BackupIntegrity(
                 files = fileEntries,
                 resources = resourceEntries,
                 resourceAliases = resourceAliases.toSortedMap(),
+            ),
+            technical = BackupManifestTechnical(
+                configItems = sortedConfigItems,
+                categoryIds = categories.associate { it.name to it.id },
+                sensitiveCategoryIds = sensitiveCategories.associate { it.name to it.id },
+                categoryFiles = categories.associate { it.id to it.files },
                 ignoredCategories = ignoredCategories.toSortedSet(),
                 restoreIgnoredCategories = restoreIgnoredCategories.toSortedSet(),
                 sensitiveIncluded = sensitiveIncluded,

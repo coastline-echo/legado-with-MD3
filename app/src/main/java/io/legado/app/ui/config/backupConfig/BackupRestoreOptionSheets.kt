@@ -105,7 +105,7 @@ fun RestoreOptionSheet(
                         action(mode)
                     }
                     OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_merge),
-                        description = stringResource(R.string.restore_strategy_merge_desc)) {
+                        description = stringResource(R.string.restore_merge_desc)) {
                         restore(RestoreMode.KEEP_APPLICATION)
                     }
                     OptionCard(Icons.Default.PhoneAndroid, stringResource(R.string.restore_strategy_by_category),

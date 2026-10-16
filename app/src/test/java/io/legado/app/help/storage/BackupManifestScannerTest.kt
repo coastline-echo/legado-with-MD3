@@ -1,5 +1,7 @@
 package io.legado.app.help.storage
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import io.legado.app.utils.GSON
 import java.nio.file.Files
 import java.io.FileOutputStream
@@ -25,16 +27,29 @@ class BackupManifestScannerTest {
                 ),
                 appVersion = "test",
             )
-            val readable = GSON.toJsonTree(full).asJsonObject.apply {
-                remove("technical")
-                getAsJsonArray("categories").forEach { category ->
-                    category.asJsonObject.remove("id")
-                    category.asJsonObject.remove("count")
-                    category.asJsonObject.remove("files")
-                }
+            val readable = JsonObject().apply {
+                add("备份信息", JsonObject().apply {
+                    addProperty("清单格式版本", 1)
+                    addProperty("生成应用版本", "test")
+                })
+                add("备份内容", JsonObject().apply {
+                    add("类别", JsonArray().apply {
+                        add(JsonObject().apply {
+                            addProperty("名称", "书架")
+                            addProperty("状态", "已备份")
+                            addProperty("数量", 0)
+                        })
+                    })
+                    add("配置项", JsonArray())
+                })
+                add("未备份内容", JsonObject().apply {
+                    add("类别", JsonArray())
+                    add("配置项", JsonArray())
+                })
+                add("敏感信息", JsonArray())
             }
             root.resolve("manifest.json").writeText(GSON.toJson(readable))
-            root.resolve("integrity.json").writeText(GSON.toJson(full.technical))
+            root.resolve("integrity.json").writeText(GSON.toJson(full.integrity.copy(recovery = full.technical)))
 
             val result = BackupManifestScanner.scan(root)
             assertTrue(result.isUsable)
@@ -46,11 +61,11 @@ class BackupManifestScannerTest {
     }
 
     @Test
-    fun `null technical field uses the default technical section`() {
+    fun `missing integrity is reported without crashing`() {
         val root = Files.createTempDirectory("null-technical").toFile()
         try {
             root.resolve("manifest.json").writeText(
-                """{"formatVersion":1,"appVersion":"test","createdAt":1,"technical":null}"""
+                """{"备份信息":{"清单格式版本":1,"生成应用版本":"test"},"备份内容":{"类别":[],"配置项":[]},"未备份内容":{"类别":[],"配置项":[]},"敏感信息":[]}"""
             )
             val result = BackupManifestScanner.scan(root)
             assertFalse(result.legacyFormat)
@@ -272,7 +287,7 @@ class BackupManifestScannerTest {
                     GSON.toJson(
                         BackupManifest(
                             createdAt = 1L,
-                            technical = BackupManifestTechnical(
+                            integrity = BackupIntegrity(
                                 files = emptyList(),
                                 resources = emptyList(),
                             ),

@@ -29,6 +29,9 @@ data class BackupRestoreResult(
     /** 每个失败类别对应的可展示原因，不包含凭据内容。 */
     val failedCategoryDetails: Map<String, List<String>> = emptyMap(),
     val categoryStats: Map<String, RestoreCategoryStats> = emptyMap(),
+    /** 本次 ZIP 可选择的类别及用户选择；未选择不等于恢复后无变化。 */
+    val restoreAvailableCategories: Set<String> = emptySet(),
+    val restoreSelectedCategories: Set<String> = emptySet(),
     val writtenConfigKeys: Int = 0,
     val ignoredConfigKeys: Int = 0,
     val unsupportedConfigKeys: Int = 0,

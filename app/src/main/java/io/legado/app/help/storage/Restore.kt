@@ -510,11 +510,23 @@ private suspend fun restore(
         // 各 DAO 仍负责实体主键的具体合并策略。
         val backupRestoreIgnoredCategories = BackupManifestScanner.scan(File(path)).manifest
             ?.restoreIgnoredCategories.orEmpty()
+        val plannerInputs = restorePlannerCategories(path, backupRestoreIgnoredCategories)
         val categoryPlans = RestoreCategoryPlanner.planByCategory(
-            inputs = restorePlannerCategories(path, backupRestoreIgnoredCategories),
+            inputs = plannerInputs,
             modes = categoryModes,
             defaultMode = mode.takeUnless { it == RestoreMode.BY_CATEGORY } ?: RestoreMode.KEEP_APPLICATION,
         ).associateBy { it.category }
+        // 按同一类别目录记录选择范围；只把用户未勾选的类别展示为“未处理”，
+        // 不参与实际恢复统计，也不把忽略/失败误报成“无变化”。
+        val availableCategories = plannerInputs
+            .filter { it.backupPresent &&
+                (mode != RestoreMode.CLEAR_THEN_RESTORE || it.backupItemIds.isNotEmpty()) }
+            .mapTo(linkedSetOf()) { it.category }
+        val chosenCategories = if (mode == RestoreMode.BY_CATEGORY || mode == RestoreMode.CLEAR_THEN_RESTORE) {
+            availableCategories.intersect(selectedCategories)
+        } else {
+            availableCategories
+        }
         val explicitlyEmptyCategories = File(path).walkTopDown()
             .filter { it.isFile && it.extension.equals("json", ignoreCase = true) }
             .mapNotNull { file ->
@@ -1213,6 +1225,8 @@ BackupRestoreResultBus.emit(
                 failedCategoryCounts = failedCategoryCounts.toMap(),
                 failedCategoryDetails = failedCategoryDetails.mapValues { (_, details) -> details.toList() },
                 categoryStats = categoryStats,
+                restoreAvailableCategories = availableCategories,
+                restoreSelectedCategories = chosenCategories,
                 configFileMissing = configFileMissing,
                 configFileParseFailed = configFileParseFailed,
                 decryptionFailedConfigKeyNames = decryptionFailedConfigKeys.toSet(),
@@ -1396,14 +1410,16 @@ private fun restorePlannerCategories(
     }
 
     /** 恢复 ZIP 内按 hash 命名的背景资源；单张图片失败不影响其他类别。 */
-    private fun restoreBackgroundResources(path: String): Int {
+    private suspend fun restoreBackgroundResources(path: String): Int {
         val scan = BackupManifestScanner.scan(File(path))
         val manifest = scan.manifest
         val targetDir = appCtx.externalFiles.getFile("bg").apply { mkdirs() }
         var failures = 0
         val restoredResources = linkedSetOf<String>()
-        if (manifest == null) {
-            // 兼容旧 WebDAV background/目录：旧格式没有 hash 清单，只能按文件名迁移。
+        // 兼容旧 WebDAV background/目录，以及调试期曾写入资源但未登记
+        // manifest.resources 的 ZIP：这两类都只能按文件名迁移，不能做摘要校验。
+        // 不能仅以 manifest 是否存在判断，否则“清单存在但资源列表为空”的备份会被静默跳过。
+        if (manifest == null || manifest.resources.isEmpty()) {
             val legacyDirs = listOf(File(path, "assets/background"), File(path, "background"))
             val restoredNames = linkedSetOf<String>()
             legacyDirs.flatMap { it.listFiles()?.filter(File::isFile).orEmpty() }
@@ -1433,6 +1449,28 @@ private fun restorePlannerCategories(
                         text = text.replace(name, targetDir.resolve(name).absolutePath)
                     }
                     file.writeText(text)
+                }
+
+                // 同步更新设备上的 SharedPreferences 背景图片键
+                val backupConfigFile = File(path, "config.xml")
+                if (backupConfigFile.isFile) {
+                    val backupConfigMap = try {
+                        readXmlToMap(backupConfigFile)
+                    } catch (e: Exception) {
+                        AppLog.put("读取备份配置失败，无法同步背景图片设置：${e.localizedMessage}", e)
+                        emptyMap<String, Any?>()
+                    }
+                    val backgroundKeys = setOf(
+                        PreferKey.bgImage,
+                        PreferKey.bgImageN,
+                        PreferKey.bgImageBlurring,
+                        PreferKey.bgImageNBlurring,
+                    )
+                    val backgroundValues = backupConfigMap.filterKeys { it in backgroundKeys }
+                    if (backgroundValues.isNotEmpty()) {
+                        AppConfigStore.putAllAndAwait(backgroundValues)
+                        SettingsWriter.awaitPendingWrites()
+                    }
                 }
             }
             return failures
@@ -1470,9 +1508,38 @@ private fun restorePlannerCategories(
                     if (relative !in restoredResources) return@forEach
                     val target = resourceTargetDirectory(relative)?.resolve(relative.substringAfterLast('/'))
                         ?: return@forEach
-                    text = text.replace(alias, target.absolutePath)
+                    // 新清单使用稳定占位符；调试期样本可能只记录了旧文件名。
+                    // 旧文件名出现在绝对路径末尾时，必须替换整段路径，不能只替换文件名，
+                    // 否则会得到“旧目录 + 新绝对路径”的无效引用。
+                    val pathPattern = Regex(
+                        "(?:(?:[A-Za-z]:)?[/\\\\])[^\"'<>\\s]*${Regex.escape(alias)}"
+                    )
+                    text = text.replace(pathPattern, target.absolutePath)
+                        .replace(alias, target.absolutePath)
                 }
                 file.writeText(text)
+            }
+
+            // 同步更新设备上的 SharedPreferences 背景图片键，避免只选 resources 不选 settings 时配置不同步
+            val backupConfigFile = File(path, "config.xml")
+            if (backupConfigFile.isFile) {
+                val backupConfigMap = try {
+                    readXmlToMap(backupConfigFile)
+                } catch (e: Exception) {
+                    AppLog.put("读取备份配置失败，无法同步背景图片设置：${e.localizedMessage}", e)
+                    emptyMap<String, Any?>()
+                }
+                val backgroundKeys = setOf(
+                    PreferKey.bgImage,
+                    PreferKey.bgImageN,
+                    PreferKey.bgImageBlurring,
+                    PreferKey.bgImageNBlurring,
+                )
+                val backgroundValues = backupConfigMap.filterKeys { it in backgroundKeys }
+                if (backgroundValues.isNotEmpty()) {
+                    AppConfigStore.putAllAndAwait(backgroundValues)
+                    SettingsWriter.awaitPendingWrites()
+                }
             }
         }
         return failures

@@ -21,14 +21,16 @@ data class BackupScanResult(
 /** 恢复写入前校验 ZIP 解压目录及清单中的文件。 */
 object BackupManifestScanner {
 
-    /** 当前分支清单固定使用 v1 结构；main 无清单时由上层走旧格式路径。 */
+    /** 解析当前分支清单；main 无清单时由上层走旧格式路径。 */
     private fun parseManifest(json: String): BackupManifest {
         val source = JsonParser.parseString(json).asJsonObject
-        // Gson 通过反射构造 Kotlin 数据类时不会应用非空默认值；调试期清单或
-        // 手工生成的清单可能显式写出 technical:null。先移除空字段，让模型的
-        // BackupManifestTechnical 默认值生效，避免恢复结果阶段触发 NPE。
+        // Gson 通过反射构造 Kotlin 数据类时不应用默认值：不完整清单也要以
+        // 明确校验警告结束，而不是在合并完整性文件时抛出空指针。
         if (!source.has("technical") || source.get("technical")?.isJsonNull == true) {
-            source.remove("technical")
+            source.add("technical", GSON.toJsonTree(BackupManifestTechnical()))
+        }
+        if (!source.has("integrity") || source.get("integrity")?.isJsonNull == true) {
+            source.add("integrity", GSON.toJsonTree(BackupIntegrity()))
         }
         source.getAsJsonObject("备份信息")?.let { info ->
             info.get("清单格式版本")?.let { source.add("formatVersion", it) }
@@ -55,6 +57,12 @@ object BackupManifestScanner {
                 JsonArray().apply { values.forEach { add(toInternalItem(it.asJsonObject)) } }
             } ?: JsonArray())
         }
+        if (!source.has("categories") || source.get("categories")?.isJsonNull == true) {
+            source.add("categories", JsonArray())
+        }
+        if (!source.has("sensitiveCategories") || source.get("sensitiveCategories")?.isJsonNull == true) {
+            source.add("sensitiveCategories", JsonArray())
+        }
         return GSON.fromJson(source, BackupManifest::class.java)
     }
 
@@ -62,12 +70,15 @@ object BackupManifestScanner {
         addProperty("name", source.get("名称")?.asString ?: source.get("name")?.asString.orEmpty())
         addProperty("status", source.get("状态")?.asString ?: source.get("status")?.asString.orEmpty())
         source.get("原因")?.asString?.takeIf { it.isNotBlank() }?.let { addProperty("detail", it) }
+        source.get("数量")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.let {
+            addProperty("count", it.asInt)
+        }
     }
 
     fun scanZip(input: InputStream): BackupScanResult {
         val entries = linkedMapOf<String, Pair<Long, String>>()
         var manifest: BackupManifest? = null
-        var integrity: BackupManifestTechnical? = null
+        var integrity: BackupIntegrity? = null
         var manifestSeen = false
         var manifestWarning: String? = null
         val entryWarnings = mutableListOf<String>()
@@ -108,7 +119,7 @@ object BackupManifestScanner {
                     }
                     if (integrityOutput != null) {
                         integrity = runCatching {
-                            GSON.fromJson(integrityOutput.toString(Charsets.UTF_8), BackupManifestTechnical::class.java)
+                            GSON.fromJson(integrityOutput.toString(Charsets.UTF_8), BackupIntegrity::class.java)
                         }.getOrNull()
                         if (integrity == null) entryWarnings += "integrity.json 解析失败"
                     }
@@ -122,7 +133,10 @@ object BackupManifestScanner {
         warnings += entryWarnings.distinct()
         manifestWarning?.let { warnings += it }
         val parsedManifest = manifest
-            ?.copy(technical = integrity ?: manifest.technical)
+            ?.copy(
+                integrity = integrity ?: manifest.integrity,
+                technical = integrity?.recovery ?: manifest.technical,
+            )
             ?.withTechnicalCategoryIds()
             ?.withTechnicalSensitiveCategoryIds()
             ?: return BackupScanResult(false, warnings = warnings.ifEmpty { listOf("manifest.json 解析失败") })
@@ -140,7 +154,7 @@ object BackupManifestScanner {
                 }
             }
         }
-        if (integrity == null && parsedManifest.technical.files.isEmpty() && parsedManifest.technical.resources.isEmpty()) {
+        if (integrity == null && parsedManifest.files.isEmpty() && parsedManifest.resources.isEmpty()) {
             warnings += "integrity.json 缺失，无法校验备份文件完整性"
         }
         val declaredEntries = (parsedManifest.files.map { it.name } + parsedManifest.resources.map { it.name }).toSet()
@@ -181,12 +195,15 @@ object BackupManifestScanner {
             }
         val integrity = File(root, "integrity.json").takeIf(File::isFile)?.let { file ->
             runCatching {
-                GSON.fromJson(file.readText(), BackupManifestTechnical::class.java)
+                GSON.fromJson(file.readText(), BackupIntegrity::class.java)
             }.getOrElse {
                 null
             }
         }
-        val mergedManifest = manifest.copy(technical = integrity ?: manifest.technical)
+        val mergedManifest = manifest.copy(
+            integrity = integrity ?: manifest.integrity,
+            technical = integrity?.recovery ?: manifest.technical,
+        )
             .withTechnicalCategoryIds()
             .withTechnicalSensitiveCategoryIds()
         val warnings = mutableListOf<String>()
@@ -204,7 +221,7 @@ object BackupManifestScanner {
                 }
             }
         }
-        if (integrity == null && mergedManifest.technical.files.isEmpty() && mergedManifest.technical.resources.isEmpty()) {
+        if (integrity == null && mergedManifest.files.isEmpty() && mergedManifest.resources.isEmpty()) {
             warnings += "integrity.json 缺失，无法校验备份文件完整性"
         }
         mergedManifest.files.forEach { entry ->
@@ -262,28 +279,22 @@ object BackupManifestScanner {
     }
 
     private fun BackupManifest.withTechnicalCategoryIds(): BackupManifest {
-        if (categories.all { it.id.isNotBlank() } || technical.categoryLabels.isEmpty()) return this
+        if (categories.all { it.id.isNotBlank() } || technical.categoryIds.isEmpty()) return this
         return copy(
             categories = categories.map { category ->
                 if (category.id.isNotBlank()) category else category.copy(
-                    id = technical.categoryLabels.entries
-                        .firstOrNull { (_, label) -> label == category.name }
-                        ?.key
-                        .orEmpty(),
+                    id = technical.categoryIds[category.name].orEmpty(),
                 )
             },
         )
     }
 
     private fun BackupManifest.withTechnicalSensitiveCategoryIds(): BackupManifest {
-        if (sensitiveCategories.all { it.id.isNotBlank() } || technical.sensitiveCategoryLabels.isEmpty()) return this
+        if (sensitiveCategories.all { it.id.isNotBlank() } || technical.sensitiveCategoryIds.isEmpty()) return this
         return copy(
             sensitiveCategories = sensitiveCategories.map { category ->
                 if (category.id.isNotBlank()) category else category.copy(
-                    id = technical.sensitiveCategoryLabels.entries
-                        .firstOrNull { (_, label) -> label == category.name }
-                        ?.key
-                        .orEmpty(),
+                    id = technical.sensitiveCategoryIds[category.name].orEmpty(),
                 )
             },
         )
@@ -306,11 +317,8 @@ object BackupManifestScanner {
         manifest: BackupManifest,
         warnings: MutableList<String>,
     ) {
-        val counts = manifest.technical.categoryCounts.ifEmpty {
-            manifest.categories.associate { it.id to it.count }
-        }
-        counts.forEach { (category, count) ->
-            if (count < 0) warnings += "类别数量无效：$category=$count"
+        manifest.categories.forEach { category ->
+            if (category.count < 0) warnings += "类别数量无效：${category.id}=${category.count}"
         }
     }
 
