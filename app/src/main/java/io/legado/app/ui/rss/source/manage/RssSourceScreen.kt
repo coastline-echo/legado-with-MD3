@@ -191,7 +191,8 @@ fun RssSourceScreen(
         groups = groups,
         onDismissRequest = { showGroupManageSheet = false },
         onUpdateGroup = { old, new -> onIntent(RssSourceIntent.UpdateGroup(old, new)) },
-        onDeleteGroup = { onIntent(RssSourceIntent.DeleteGroup(it)) }
+        onDeleteGroup = { onIntent(RssSourceIntent.DeleteGroup(it)) },
+        onDeleteGroups = { onIntent(RssSourceIntent.DeleteGroups(it)) }
     )
 
 
@@ -235,6 +236,7 @@ fun RssSourceScreen(
         data = showDeleteRuleDialog,
         onDismissRequest = { showDeleteRuleDialog = null },
         title = stringResource(R.string.delete),
+        text = stringResource(R.string.sure_del),
         confirmText = stringResource(R.string.ok),
         onConfirm = { rule ->
             onIntent(RssSourceIntent.Delete(rule))

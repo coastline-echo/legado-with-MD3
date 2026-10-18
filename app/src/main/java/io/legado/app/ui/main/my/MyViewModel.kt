@@ -5,6 +5,7 @@ import androidx.compose.runtime.Stable
 import androidx.lifecycle.viewModelScope
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.EventBus
+import io.legado.app.help.LocalNetworkAccess
 import io.legado.app.service.WebService
 import io.legado.app.utils.eventBus.FlowEventBus
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,7 +29,11 @@ sealed class PrefClickEvent {
     object OpenReadRecord : PrefClickEvent()
     object OpenBookCacheManage : PrefClickEvent()
     object OpenBookSourceManage : PrefClickEvent()
+    object OpenReplaceRules : PrefClickEvent()
     object OpenHighlightTagRule : PrefClickEvent()
+    object OpenTxtTocRule : PrefClickEvent()
+    object OpenDictRule : PrefClickEvent()
+    object OpenAllBookmark : PrefClickEvent()
     object OpenAbout : PrefClickEvent()
     object ToggleWebService : PrefClickEvent()
     object ExitApp : PrefClickEvent()
@@ -36,9 +41,15 @@ sealed class PrefClickEvent {
 
 sealed interface MyIntent {
     data object ToggleWebService : MyIntent
+
+    /** 本地网络权限授予后由界面触发，避免再次进入申请分支。 */
+    data object StartWebService : MyIntent
 }
 
-sealed interface MyEffect
+sealed interface MyEffect {
+    /** Android 17 起 Web 服务需要先获得本地网络权限才能被其他设备访问。 */
+    data object RequestLocalNetworkPermission : MyEffect
+}
 
 class MyViewModel(
     application: Application
@@ -47,7 +58,7 @@ class MyViewModel(
     private val _uiState = MutableStateFlow(
         MyUiState(
             isWebServiceRun = WebService.isRun,
-            webServiceAddress = WebService.hostAddress
+            webServiceAddress = if (WebService.isRun) WebService.hostAddress else ""
         )
     )
     val uiState: StateFlow<MyUiState> = _uiState.asStateFlow()
@@ -57,11 +68,13 @@ class MyViewModel(
     init {
         viewModelScope.launch {
             FlowEventBus.with<String>(EventBus.WEB_SERVICE)
-                .collect { address ->
+                .collect {
+                    // 回放的旧事件只触发刷新，不能覆盖服务的当前状态和地址。
+                    val running = WebService.isRun
                     _uiState.update { state ->
                         state.copy(
-                            isWebServiceRun = address.isNotEmpty(),
-                            webServiceAddress = address
+                            isWebServiceRun = running,
+                            webServiceAddress = if (running) WebService.hostAddress else ""
                         )
                     }
                 }
@@ -71,16 +84,17 @@ class MyViewModel(
     fun onIntent(intent: MyIntent) {
         when (intent) {
             MyIntent.ToggleWebService -> {
-                val currentIsRun = _uiState.value.isWebServiceRun
-
-                if (!currentIsRun) {
-                    WebService.start(context)
-                } else {
+                if (_uiState.value.isWebServiceRun) {
                     WebService.stop(context)
                     _uiState.update { it.copy(isWebServiceRun = false, webServiceAddress = "") }
+                } else if (LocalNetworkAccess.isGranted(context)) {
+                    WebService.start(context)
+                } else {
+                    _effects.tryEmit(MyEffect.RequestLocalNetworkPermission)
                 }
-
             }
+
+            MyIntent.StartWebService -> WebService.start(context)
         }
     }
 

@@ -290,6 +290,7 @@ class BookSourceViewModel(
             is BookSourceIntent.RemoveFromGroup -> updateGroups(intent.ids, intent.group, false)
             is BookSourceIntent.UpdateGroup -> updateGroup(intent.old, intent.new)
             is BookSourceIntent.DeleteGroup -> updateGroup(intent.group, "")
+            is BookSourceIntent.DeleteGroups -> deleteGroups(intent.groups)
             is BookSourceIntent.CheckSelectedInterval -> checkInterval(intent.ids)
             is BookSourceIntent.StartCheck -> {
                 if (checkGateway.state.value.isRunning) {
@@ -394,6 +395,23 @@ class BookSourceViewModel(
         repository.updateSources(*sources.toTypedArray())
     }
 
+    private fun deleteGroups(groups: List<String>) = launch {
+        val toRemove = groups.toSet()
+        val allSources = mutableMapOf<String, io.legado.app.data.entities.BookSource>()
+        groups.forEach { group ->
+            repository.getByGroup(group).forEach { source ->
+                val current = allSources.getOrPut(source.bookSourceUrl) { source }
+                current.bookSourceGroup?.splitNotBlank(",")?.toHashSet()?.let { set ->
+                    set.removeAll(toRemove)
+                    current.bookSourceGroup = TextUtils.join(",", set)
+                }
+            }
+        }
+        if (allSources.isNotEmpty()) {
+            repository.updateSources(*allSources.values.toTypedArray())
+        }
+    }
+
     private fun moveToEdge(ids: Set<String>, toTop: Boolean) = launch {
         repository.moveToEdge(parts(ids), toTop)
     }
@@ -476,7 +494,10 @@ class BookSourceViewModel(
                 )
             }.onSuccess { importState.value = it }
                 .onFailure {
-                    importState.value = BaseImportUiState.Error(it.localizedMessage ?: "导入失败")
+                    importState.value = BaseImportUiState.Error(
+                        it.localizedMessage
+                            ?: application.getString(io.legado.app.R.string.book_source_import_failed)
+                    )
                 }
         }
     }
@@ -503,9 +524,11 @@ class BookSourceViewModel(
                 } else listOf(GSON.fromJsonObject<BookSource>(text).getOrThrow())
             }
 
-            else -> error("格式不正确")
+            else -> error(application.getString(io.legado.app.R.string.invalid_format))
         }
-        require(sources.all { it.bookSourceUrl.isNotBlank() }) { "不是书源" }
+        require(sources.all { it.bookSourceUrl.isNotBlank() }) {
+            application.getString(io.legado.app.R.string.book_source_invalid_source)
+        }
         return sources
     }
 
@@ -569,7 +592,11 @@ class BookSourceViewModel(
             ContentProcessor.upReplaceRules()
             importState.value = BaseImportUiState.Idle
             _effects.tryEmit(BookSourceEffect.ImportFinished)
-            _effects.tryEmit(BookSourceEffect.ShowSnackbar("导入完成"))
+            _effects.tryEmit(
+                BookSourceEffect.ShowSnackbar(
+                    application.getString(io.legado.app.R.string.book_source_import_success)
+                )
+            )
         }
     }
 
@@ -578,9 +605,23 @@ class BookSourceViewModel(
             val selected = repository.getAll().filter { ids.isEmpty() || it.bookSourceUrl in ids }
             application.contentResolver.openOutputStream(uri)?.bufferedWriter()
                 ?.use { it.write(GSON.toJson(selected)) }
-                ?: error("无法打开导出文件")
-        }.onSuccess { _effects.tryEmit(BookSourceEffect.ShowSnackbar("导出成功")) }
-            .onFailure { _effects.tryEmit(BookSourceEffect.ShowSnackbar("导出失败: ${it.localizedMessage}")) }
+                ?: error(application.getString(io.legado.app.R.string.book_source_export_open_failed))
+        }.onSuccess {
+            _effects.tryEmit(
+                BookSourceEffect.ShowSnackbar(
+                    application.getString(io.legado.app.R.string.export_success)
+                )
+            )
+        }.onFailure {
+            _effects.tryEmit(
+                BookSourceEffect.ShowSnackbar(
+                    application.getString(
+                        io.legado.app.R.string.book_source_export_failed,
+                        it.localizedMessage.orEmpty(),
+                    )
+                )
+            )
+        }
     }
 
     private fun uploadSources(ids: Set<String>) = launch {
@@ -594,13 +635,20 @@ class BookSourceViewModel(
         }.onSuccess { url ->
             _effects.tryEmit(
                 BookSourceEffect.ShowSnackbar(
-                    message = "上传成功: $url",
-                    actionLabel = "复制链接",
+                    message = application.getString(io.legado.app.R.string.book_source_upload_success, url),
+                    actionLabel = application.getString(io.legado.app.R.string.copy_url),
                     url = url,
                 )
             )
         }.onFailure {
-            _effects.tryEmit(BookSourceEffect.ShowSnackbar("上传失败: ${it.localizedMessage}"))
+            _effects.tryEmit(
+                BookSourceEffect.ShowSnackbar(
+                    application.getString(
+                        io.legado.app.R.string.book_source_upload_failed,
+                        it.localizedMessage.orEmpty(),
+                    )
+                )
+            )
         }
     }
 

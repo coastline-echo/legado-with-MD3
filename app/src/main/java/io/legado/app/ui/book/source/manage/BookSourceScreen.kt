@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -38,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -172,7 +176,7 @@ fun BookSourceScreen(
     var showOnlineImport by remember { mutableStateOf(false) }
     var checkSourceIds by remember { mutableStateOf<Set<String>?>(null) }
     var checkSheet by remember { mutableStateOf<CheckSheet?>(null) }
-    var checkOptionsDraft by remember { mutableStateOf(state.checkOptions) }
+    var checkOptionsDraft by remember(state.checkOptions) { mutableStateOf(state.checkOptions) }
     var pendingExportIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showExportSheet by remember { mutableStateOf(false) }
     var showImportOptions by remember { mutableStateOf(false) }
@@ -406,14 +410,18 @@ fun BookSourceScreen(
             onIntent(BookSourceIntent.RemoveFromGroup(selectedIds, it)); removeGroup = false
         })
     GroupManageBottomSheet(
-        groupManage, state.groups, { groupManage = false },
+        show = groupManage,
+        groups = state.groups,
+        onDismissRequest = { groupManage = false },
         onUpdateGroup = { old, new -> onIntent(BookSourceIntent.UpdateGroup(old, new)) },
-        onDeleteGroup = { onIntent(BookSourceIntent.DeleteGroup(it)) }
+        onDeleteGroup = { onIntent(BookSourceIntent.DeleteGroup(it)) },
+        onDeleteGroups = { onIntent(BookSourceIntent.DeleteGroups(it)) }
     )
     AppAlertDialog(
         deleteIds,
         { deleteIds = null },
         stringResource(R.string.delete),
+        text = stringResource(R.string.sure_del),
         confirmText = stringResource(R.string.ok),
         onConfirm = { ids -> onIntent(BookSourceIntent.Delete(ids)); deleteIds = null },
         dismissText = stringResource(R.string.cancel),
@@ -513,7 +521,10 @@ fun BookSourceScreen(
                 showExportSheet = true
             },
         ),
-        onDeleteSelected = { deleteIds = @Suppress("UNCHECKED_CAST") (it as Set<String>) },
+        onDeleteSelected = {
+            @Suppress("UNCHECKED_CAST")
+            onIntent(BookSourceIntent.Delete(it as Set<String>))
+        },
         dropDownMenuContent = { dismiss ->
             RoundDropdownMenuItem(
                 text = stringResource(R.string.group_manage),
@@ -640,23 +651,31 @@ fun BookSourceScreen(
                             },
                             title = item.name,
                             supportingContent = if (
-                                item.group != null || item.checkMessage != null
+                                item.group != null || item.checkMessage != null || item.hasExploreUrl
                             ) {
                                 {
-                                    Column {
-                                        item.group?.let { group ->
-                                            AppText(
-                                                text = group,
-                                                style = LegadoTheme.typography.bodySmall,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (item.hasExploreUrl) {
+                                            DiscoveryIndicator(item.enabledExplore)
                                         }
-                                        item.checkMessage?.let { message ->
-                                            AppText(
-                                                text = message,
-                                                style = LegadoTheme.typography.bodySmall,
-                                            )
+                                        Column {
+                                            item.group?.let { group ->
+                                                AppText(
+                                                    text = group,
+                                                    style = LegadoTheme.typography.bodySmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            item.checkMessage?.let { message ->
+                                                AppText(
+                                                    text = message,
+                                                    style = LegadoTheme.typography.bodySmall,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -766,7 +785,8 @@ private fun CheckBookSourceSheet(
     onOpenSettings: () -> Unit,
     onConfirm: (Set<String>, String, BookSourceCheckOptionsUi) -> Unit,
 ) {
-    var keyword by remember(sourceIds) { mutableStateOf("我的") }
+    val defaultKeyword = stringResource(R.string.book_source_check_default_keyword)
+    var keyword by remember(sourceIds, defaultKeyword) { mutableStateOf(defaultKeyword) }
     AppModalBottomSheet(
         data = sourceIds,
         onDismissRequest = onDismissRequest,
@@ -796,6 +816,25 @@ private fun CheckBookSourceSheet(
             singleLine = true,
         )
     }
+}
+
+/**
+ * 书源发现状态标志：有发现且已启用为绿点，有发现但未启用为红点，无发现不显示标志。
+ * 标志位于条目信息行（分组名 / 校验信息行）开头。状态文案已由条目 contentDescription
+ * 描述，这里仅作装饰性渲染。
+ */
+@Composable
+private fun DiscoveryIndicator(enabledExplore: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(
+                colorResource(
+                    if (enabledExplore) R.color.md_green_500 else R.color.md_red_400
+                )
+            )
+    )
 }
 
 private enum class CheckSheet { Run, Settings }

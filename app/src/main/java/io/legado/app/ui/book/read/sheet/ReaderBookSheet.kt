@@ -1,7 +1,5 @@
 package io.legado.app.ui.book.read.sheet
 
-import android.app.Activity
-import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -39,8 +37,11 @@ import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FindReplace
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -51,8 +52,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.DownloadForOffline
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -84,7 +83,6 @@ import io.legado.app.data.entities.Bookmark
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.isLocalTxt
 import io.legado.app.ui.book.toc.DownloadState
-import io.legado.app.ui.book.toc.TocActivity
 import io.legado.app.ui.book.toc.TocBookmarkItemUi
 import io.legado.app.ui.book.toc.TocEffect
 import io.legado.app.ui.book.toc.TocIntent
@@ -92,14 +90,16 @@ import io.legado.app.ui.book.toc.TocItemUi
 import io.legado.app.ui.book.toc.TocMarkingItemUi
 import io.legado.app.ui.book.toc.TocUiState
 import io.legado.app.ui.book.toc.TocViewModel
-import io.legado.app.ui.book.toc.rule.preview.TxtTocRulePreviewActivity
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppFloatingActionButtonMenu
+import io.legado.app.ui.widget.components.ChapterStatusIcons
 import io.legado.app.ui.widget.components.EmptyMessage
 import io.legado.app.ui.widget.components.FabMenuItem
 import io.legado.app.ui.widget.components.bookmark.BookmarkEditSheet
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.image.cover.CoilBookCover
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
@@ -109,6 +109,7 @@ import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.progressIndicator.AppContainedLoadingIndicator
 import io.legado.app.ui.widget.components.tabRow.CardTabRow
 import io.legado.app.ui.widget.components.text.AppText
+import io.legado.app.utils.HtmlFormatter
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -132,7 +133,7 @@ fun ReaderBookSheetRoute(
     onChapterClick: (chapterIndex: Int, chapterPos: Int) -> Unit,
     currentChapterIndex: Int? = null,
     onOpenFullBookInfo: () -> Unit,
-    onOpenFullToc: (() -> Unit)? = null,
+    onOpenFullToc: (initialPage: Int) -> Unit,
     /** 书签页跳转：携带完整书签供跳转前校验。 */
     onBookmarkNavigate: (Bookmark) -> Unit = { _ -> },
     /** 笔记页跳转：携带完整展示项供跳转前校验。 */
@@ -143,6 +144,11 @@ fun ReaderBookSheetRoute(
     onOpenChapterUrl: () -> Unit = {},
     onToggleReadUrlInBrowser: () -> Unit = {},
     sourceActions: ReaderBookSourceActions? = null,
+    /**
+     * 「本地目录规则」：只对本地 txt 书出现，由宿主导航到规则预览页；应用结果走书页结果通道
+     * 回灌阅读页，规则保存后本面板会随 `bookRepository.flowBook` 自动刷新。
+     */
+    onEditLocalTocRule: (String?) -> Unit = {},
     viewModel: TocViewModel = koinViewModel(key = "reader-book-sheet-$bookUrl"),
 ) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
@@ -153,25 +159,6 @@ fun ReaderBookSheetRoute(
         ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
         uri?.let { viewModel.onIntent(TocIntent.ExportBookmarks(it, pendingExportMarkdown)) }
-    }
-    val tocRegexLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.onIntent(
-                TocIntent.SaveTocRegex(result.data?.getStringExtra("tocRegex").orEmpty())
-            )
-        }
-    }
-    val fullTocLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            onChapterClick(
-                result.data?.getIntExtra("index", 0) ?: 0,
-                result.data?.getIntExtra("chapterPos", 0) ?: 0,
-            )
-        }
     }
 
     LaunchedEffect(bookUrl) {
@@ -205,36 +192,18 @@ fun ReaderBookSheetRoute(
             when (tab) {
                 ReaderBookSheetTab.Information -> onOpenFullBookInfo()
                 ReaderBookSheetTab.Toc -> {
-                    if (onOpenFullToc != null) {
-                        onOpenFullToc()
-                    } else {
-                        fullTocLauncher.launch(
-                            Intent(context, TocActivity::class.java)
-                                .putExtra("bookUrl", bookUrl)
-                                .putExtra("initialPage", 0)
-                        )
-                    }
+                    onOpenFullToc(0)
                 }
 
                 ReaderBookSheetTab.Bookmarks -> {
-                    fullTocLauncher.launch(
-                        Intent(context, TocActivity::class.java)
-                            .putExtra("bookUrl", bookUrl)
-                            .putExtra("initialPage", 1)
-                    )
+                    onOpenFullToc(1)
                 }
 
-                // 笔记页无全屏落地（TocActivity 暂无对应页）
+                // 笔记页暂无对应的全屏页。
                 ReaderBookSheetTab.Marks -> Unit
             }
         },
-        onEditLocalTocRule = { regex ->
-            tocRegexLauncher.launch(
-                Intent(context, TxtTocRulePreviewActivity::class.java)
-                    .putExtra("bookUrl", bookUrl)
-                    .putExtra("tocRegex", regex)
-            )
-        },
+        onEditLocalTocRule = onEditLocalTocRule,
         onExportBookmarks = { isMarkdown, fileName ->
             pendingExportMarkdown = isMarkdown
             exportLauncher.launch(fileName)
@@ -329,6 +298,8 @@ private fun ReaderBookSheet(
         )
         HorizontalPager(
             state = pagerState,
+            // Sheet 内到边界时，平台 stretch 过冲会在松手后反向回弹。
+            overscrollEffect = null,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -420,6 +391,9 @@ internal fun ReaderBookHeader(
             author = book?.author,
             path = book?.getDisplayCover(),
             sourceOrigin = book?.origin,
+            // 阅读抽屉也是书维度场景，本地优先不跑书源脚本
+            bookUrl = book?.bookUrl,
+            preferCache = true,
             modifier = Modifier.width(40.dp),
         )
         Column(
@@ -575,6 +549,18 @@ private fun ReaderBookSourceDropdown(
 private fun ReaderBookInformation(
     book: Book?,
 ) {
+    // 简介直接以 book.intro 原样塑进 Text 会有问题：部分书源的简介带
+    // <usehtml>/<useweb>/<md> 前缀、<button>@onclick:JS</button> 与 HTML 标签，
+    // 展示出来就是一堆调用源码；formatDisplayText 还会给每行补段首缩进
+    // （两个全角空格），与详情页观感不一致。
+    // 这里改用与详情页同一套解析规则的 formatReadableText 清洗——去前缀、
+    // 丢弃 @onclick:JS 片段（只保留按钮文字，如“💬 本书讨论”）、不补缩进。
+    // 注意：LazyColumn 的 content lambda 不是 composable 作用域，remember 必须
+    // 提在本函数体开头调用。
+    val rawIntro = book?.getDisplayIntro()?.takeIf { it.isNotBlank() }
+    val formattedIntro = remember(rawIntro) {
+        rawIntro?.let { HtmlFormatter.formatReadableText(it) }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = 8.dp),
@@ -590,8 +576,8 @@ private fun ReaderBookInformation(
         book?.remark?.takeIf { it.isNotBlank() }?.let { remark ->
             item { InformationRow(stringResource(R.string.book_remark), remark) }
         }
-        book?.getDisplayIntro()?.takeIf { it.isNotBlank() }?.let { intro ->
-            item { InformationRow(stringResource(R.string.book_intro), intro) }
+        if (!formattedIntro.isNullOrBlank()) {
+            item { InformationRow(stringResource(R.string.book_intro), formattedIntro) }
         }
     }
 }
@@ -649,7 +635,7 @@ private fun CompactSearchField(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Search,
                     contentDescription = null,
                     tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -700,7 +686,7 @@ private fun CompactToolIconBox(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
+        AppIcon(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = contentColor,
@@ -731,6 +717,8 @@ private fun ReaderBookTocPage(
         action.selectedIds.size,
     )
     val cancelText = stringResource(R.string.cancel)
+    val deleteAssignmentText = stringResource(R.string.cast_assignment_delete)
+    val deleteAudioText = stringResource(R.string.read_aloud_audio_download_delete)
     val fabItems = remember(
         selected,
         action.selectedIds,
@@ -738,6 +726,8 @@ private fun ReaderBookTocPage(
         invertText,
         bookmarkText,
         downloadSelectedText,
+        deleteAssignmentText,
+        deleteAudioText,
         cancelText,
     ) {
         listOf(
@@ -752,6 +742,12 @@ private fun ReaderBookTocPage(
             },
             FabMenuItem(Icons.Default.Download, downloadSelectedText) {
                 onIntent(TocIntent.DownloadSelected)
+            },
+            FabMenuItem(Icons.Default.Groups, deleteAssignmentText) {
+                onIntent(TocIntent.DeleteAssignmentsForSelected)
+            },
+            FabMenuItem(Icons.Default.DownloadForOffline, deleteAudioText) {
+                onIntent(TocIntent.DeleteAudioDownloadsForSelected)
             },
             FabMenuItem(Icons.Default.Clear, cancelText) {
                 onIntent(TocIntent.ClearSelection)
@@ -786,6 +782,12 @@ private fun ReaderBookTocPage(
                 onQueryChange = { onIntent(TocIntent.SetSearchQuery(it)) },
                 placeholder = stringResource(R.string.search_chapters),
                 modifier = Modifier.weight(1f),
+            )
+            CompactToolIconBox(
+                selected = action.useReplace,
+                icon = Icons.Default.FindReplace,
+                contentDescription = stringResource(R.string.use_replace_rule),
+                onClick = { onIntent(TocIntent.ToggleUseReplace) },
             )
             CompactToolIconBox(
                 selected = action.showWordCount,
@@ -910,7 +912,7 @@ private fun ReaderSheetVolumeItem(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
+            AppIcon(
                 imageVector = Icons.Default.ExpandMore,
                 contentDescription = null,
                 modifier = Modifier
@@ -969,7 +971,7 @@ private fun ReaderSheetChapterItem(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (item.isVip && !item.isPay) {
-                        Icon(
+                        AppIcon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = stringResource(R.string.a11y_vip_locked),
                             tint = LegadoTheme.colorScheme.error,
@@ -996,6 +998,12 @@ private fun ReaderSheetChapterItem(
                     )
                 }
             }
+            ChapterStatusIcons(
+                item = item,
+                iconSize = 14.dp,
+                spacing = 3.dp,
+                modifier = Modifier.padding(start = 4.dp),
+            )
             ReaderSheetChapterStatus(
                 item = item,
                 showWordCount = showWordCount,
@@ -1046,30 +1054,19 @@ private fun ReaderSheetChapterStatus(
         item.downloadState == DownloadState.SUCCESS -> ReaderSheetStatusIcon(
             imageVector = Icons.Default.CheckCircle,
         )
-        item.downloadState == DownloadState.ERROR -> IconButton(
+        item.downloadState == DownloadState.ERROR -> SmallPlainButton(
             onClick = onDownloadClick,
             enabled = enabled,
-            modifier = Modifier.size(32.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = stringResource(R.string.a11y_retry_chapter, item.title),
-                tint = LegadoTheme.colorScheme.error,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-        item.downloadState == DownloadState.NONE -> IconButton(
+            icon = Icons.Default.Refresh,
+            contentDescription = stringResource(R.string.a11y_retry_chapter, item.title),
+        )
+
+        item.downloadState == DownloadState.NONE -> SmallPlainButton(
             onClick = onDownloadClick,
             enabled = enabled,
-            modifier = Modifier.size(32.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.DownloadForOffline,
-                contentDescription = stringResource(R.string.download_chapter, item.title),
-                tint = LegadoTheme.colorScheme.outline,
-                modifier = Modifier.size(16.dp),
-            )
-        }
+            icon = Icons.Outlined.DownloadForOffline,
+            contentDescription = stringResource(R.string.download_chapter, item.title),
+        )
     }
 }
 
@@ -1077,7 +1074,7 @@ private fun ReaderSheetChapterStatus(
 private fun ReaderSheetStatusIcon(
     imageVector: ImageVector,
 ) {
-    Icon(
+    AppIcon(
         imageVector = imageVector,
         contentDescription = null,
         tint = LegadoTheme.colorScheme.secondary,
@@ -1288,7 +1285,7 @@ private fun ReaderSheetBookmarkItem(
                     modifier = Modifier.weight(1f),
                 )
                 if (item.isDur) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
                         tint = contentColor,
@@ -1425,7 +1422,7 @@ private fun ReaderSheetMarkingItem(
                     )
                 }
                 if (item.isDur) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
                         tint = contentColor,

@@ -2,6 +2,7 @@ package io.legado.app.ui.book.read
 
 import android.content.Context
 import io.legado.app.R
+import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookMarking
 import io.legado.app.data.entities.Bookmark
 import io.legado.app.data.repository.HighlightRuleRepository
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.max
 import kotlin.math.min
 
@@ -36,17 +39,66 @@ class MarkingDelegate(
     private val saveMarkingUseCase: SaveMarkingUseCase,
     private val host: Host,
 ) {
+    private val inlineSaveMutex = Mutex()
+    private var inlineSaveVersion = 0L
 
     interface Host {
+        val activeSheet: ReadBookSheet?
+        fun setActiveSheet(sheet: ReadBookSheet?)
         fun reloadCurrentChapter()
-        fun dismissMarkingSheet()
         fun showToast(message: String)
     }
 
     private val _uiState = MutableStateFlow(MarkingUiState())
     val uiState = _uiState.asStateFlow()
 
-    fun open(selection: Bookmark) {
+    /**
+     * 标记 sheet 的「来源」：从目录 Sheet 的标记列表进入编辑时记下目录，
+     * 保存/删除/取消后回到它，而不是把用户丢回阅读页。从划词菜单新建时为 null。
+     *
+     * 这个状态属于标记域自己的会话，不该散落在 ViewModel 里。
+     */
+    private var returnSheet: ReadBookSheet? = null
+
+    /** 从划词菜单新建标记：没有可返回的来源 sheet。 */
+    fun openFromMenu(selection: Bookmark) {
+        returnSheet = null
+        open(selection)
+        host.setActiveSheet(ReadBookSheet.Marking)
+    }
+
+    /** 从目录 Sheet 的标记列表进入编辑：记住目录以便关闭时返回。 */
+    fun openForEditFromSheet(markingId: String) {
+        returnSheet = host.activeSheet
+        openForEdit(markingId)
+        host.setActiveSheet(ReadBookSheet.Marking)
+    }
+
+    /** 划词菜单的快速标记：以行内模式打开，不改动当前 sheet。 */
+    fun openQuick(selection: Bookmark) {
+        returnSheet = null
+        open(selection, inlineMode = true)
+    }
+
+    /** 划词菜单的快速标记编辑。 */
+    fun openQuickForEdit(markingId: String) {
+        returnSheet = null
+        openForEdit(markingId, inlineMode = true)
+    }
+
+    /** 用户主动关闭标记 sheet：清空会话并回到进入前的 sheet。 */
+    fun dismissSheetByUser() {
+        onSheetDismissed()
+        dismissSheet()
+    }
+
+    private fun dismissSheet() {
+        val target = returnSheet
+        returnSheet = null
+        host.setActiveSheet(target)
+    }
+
+    fun open(selection: Bookmark, inlineMode: Boolean = false) {
         val book = ReadBook.book
         _uiState.update {
             it.copy(
@@ -54,6 +106,7 @@ class MarkingDelegate(
                 editing = null,
                 highlightRules = persistentListOf(),
                 loading = true,
+                inlineMode = inlineMode,
             )
         }
         scope.launch(IO) {
@@ -84,7 +137,7 @@ class MarkingDelegate(
     }
 
     /** 从目录 Sheet 点标记项进入编辑模式：按 id 取完整标记预填。 */
-    fun openForEdit(markingId: String) {
+    fun openForEdit(markingId: String, inlineMode: Boolean = false) {
         val book = ReadBook.book
         _uiState.update {
             it.copy(
@@ -92,6 +145,7 @@ class MarkingDelegate(
                 editing = null,
                 highlightRules = persistentListOf(),
                 loading = true,
+                inlineMode = inlineMode,
             )
         }
         scope.launch(IO) {
@@ -116,47 +170,30 @@ class MarkingDelegate(
     fun save(style: TextProcessStyle, note: String) {
         val current = _uiState.value
         val book = ReadBook.book ?: return
+        val saveVersion = ++inlineSaveVersion
+        if (current.inlineMode) {
+            _uiState.update { it.copy(previewStyle = style, inlineDirty = true) }
+        }
         scope.launch(IO) {
-            runCatching {
-                if (current.editing != null) {
-                    // 编辑模式：锚点与源指纹沿用已有标记（保留原源），只改 style/note
-                    val mark = current.editing
-                    val anchor = mark.anchor() ?: error("marking anchor missing")
-                    saveMarkingUseCase.save(
-                        bookName = book.name,
-                        bookAuthor = book.author,
-                        bookUrl = mark.bookUrl,
-                        chapterIndex = mark.chapterIndex ?: anchor.chapterIndex,
-                        chapterPosition = anchor.chapterPosition ?: 0,
-                        selectedText = anchor.selectedText,
-                        style = style,
-                        contextBefore = anchor.contextBefore,
-                        contextAfter = anchor.contextAfter,
-                        chapterName = mark.chapterName,
-                        note = note,
-                    )
-                } else {
-                    val selection = current.selection ?: return@runCatching
-                    val (contextBefore, contextAfter) = selectionContext(selection)
-                    saveMarkingUseCase.save(
-                        bookName = book.name,
-                        bookAuthor = book.author,
-                        bookUrl = book.bookUrl,
-                        chapterIndex = selection.chapterIndex,
-                        chapterPosition = selection.chapterPos,
-                        selectedText = selection.bookText,
-                        style = style,
-                        contextBefore = contextBefore,
-                        contextAfter = contextAfter,
-                        chapterName = selection.chapterName,
-                        note = note,
-                    )
+            inlineSaveMutex.withLock {
+                if (current.inlineMode && saveVersion != inlineSaveVersion) return@withLock
+                runCatching {
+                    persistMarking(current, book, style, note)
+                }.onSuccess { saved ->
+                    if (current.inlineMode) {
+                        _uiState.update { state ->
+                            if (state.inlineMode && saveVersion == inlineSaveVersion) {
+                                state.copy(editing = saved, loading = false)
+                            } else state
+                        }
+                    }
+                    if (!current.inlineMode) {
+                        host.reloadCurrentChapter()
+                        dismissSheet()
+                    }
+                }.onFailure { error ->
+                    host.showToast(error.localizedMessage ?: context.getString(R.string.error))
                 }
-            }.onSuccess {
-                host.reloadCurrentChapter()
-                host.dismissMarkingSheet()
-            }.onFailure { error ->
-                host.showToast(error.localizedMessage ?: context.getString(R.string.error))
             }
         }
     }
@@ -169,7 +206,7 @@ class MarkingDelegate(
                 saveMarkingUseCase.delete(editing.id)
             }.onSuccess {
                 host.reloadCurrentChapter()
-                host.dismissMarkingSheet()
+                dismissSheet()
             }.onFailure { error ->
                 host.showToast(error.localizedMessage ?: context.getString(R.string.error))
             }
@@ -178,6 +215,61 @@ class MarkingDelegate(
 
     fun onSheetDismissed() {
         _uiState.value = MarkingUiState()
+    }
+
+    private suspend fun persistMarking(
+        current: MarkingUiState,
+        book: Book,
+        style: TextProcessStyle,
+        note: String,
+    ): BookMarking {
+        val marking = current.editing
+        if (marking != null) {
+            // 编辑模式沿用已有锚点与源指纹，只更新样式和备注。
+            val anchor = marking.anchor() ?: error("marking anchor missing")
+            return saveMarkingUseCase.save(
+                bookName = book.name,
+                bookAuthor = book.author,
+                bookUrl = marking.bookUrl,
+                chapterIndex = marking.chapterIndex ?: anchor.chapterIndex,
+                chapterPosition = anchor.chapterPosition ?: 0,
+                selectedText = anchor.selectedText,
+                style = style,
+                contextBefore = anchor.contextBefore,
+                contextAfter = anchor.contextAfter,
+                chapterName = marking.chapterName,
+                note = note,
+            )
+        }
+
+        val selection = current.selection ?: error("marking selection missing")
+        val (contextBefore, contextAfter) = selectionContext(selection)
+        return saveMarkingUseCase.save(
+            bookName = book.name,
+            bookAuthor = book.author,
+            bookUrl = book.bookUrl,
+            chapterIndex = selection.chapterIndex,
+            chapterPosition = selection.chapterPos,
+            selectedText = selection.bookText,
+            style = style,
+            contextBefore = contextBefore,
+            contextAfter = contextAfter,
+            chapterName = selection.chapterName,
+            note = note,
+        )
+    }
+
+    fun closeInlineSession() {
+        val current = _uiState.value
+        if (current.inlineMode) {
+            _uiState.value = MarkingUiState()
+            if (current.inlineDirty) {
+                scope.launch(IO) {
+                    inlineSaveMutex.withLock { Unit }
+                    host.reloadCurrentChapter()
+                }
+            }
+        }
     }
 
     private fun BookMarking.anchor(): TextProcessAnchor? =

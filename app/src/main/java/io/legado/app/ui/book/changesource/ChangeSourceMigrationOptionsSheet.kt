@@ -28,6 +28,8 @@ fun ChangeSourceMigrationOptionsSheet(
     title: String,
     subtitle: String? = null,
     initialOptions: ChangeSourceMigrationOptions = ChangeSourceMigrationOptions(),
+    /** 是否展示「删除已下载章节」。共存场景两本书都留在书架，删缓存没有意义。 */
+    showDeleteDownloaded: Boolean = true,
     onDismissRequest: () -> Unit,
     onConfirm: (ChangeSourceMigrationOptions) -> Unit,
 ) {
@@ -45,6 +47,9 @@ fun ChangeSourceMigrationOptionsSheet(
     }
     var migrateRemark by rememberSaveable(show) {
         mutableStateOf(initialOptions.migrateRemark)
+    }
+    var migrateAuthor by rememberSaveable(show) {
+        mutableStateOf(initialOptions.migrateAuthor)
     }
     var migrateReadConfig by rememberSaveable(show) {
         mutableStateOf(initialOptions.migrateReadConfig)
@@ -85,9 +90,12 @@ fun ChangeSourceMigrationOptionsSheet(
             CheckboxItem("自定义封面", checked = migrateCover) { migrateCover = it }
             CheckboxItem("分类与标签", checked = migrateCategory) { migrateCategory = it }
             CheckboxItem("备注和自定义简介", checked = migrateRemark) { migrateRemark = it }
+            CheckboxItem("作者", checked = migrateAuthor) { migrateAuthor = it }
             CheckboxItem("阅读设置", checked = migrateReadConfig) { migrateReadConfig = it }
-            CheckboxItem("删除已下载章节", checked = deleteDownloadedChapters) {
-                deleteDownloadedChapters = it
+            if (showDeleteDownloaded) {
+                CheckboxItem("删除已下载章节", checked = deleteDownloadedChapters) {
+                    deleteDownloadedChapters = it
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             ConfirmDismissButtonsRow(
@@ -101,6 +109,7 @@ fun ChangeSourceMigrationOptionsSheet(
                             migrateCover = migrateCover,
                             migrateCategory = migrateCategory,
                             migrateRemark = migrateRemark,
+                            migrateAuthor = migrateAuthor,
                             migrateReadConfig = migrateReadConfig,
                             deleteDownloadedChapters = deleteDownloadedChapters,
                         )

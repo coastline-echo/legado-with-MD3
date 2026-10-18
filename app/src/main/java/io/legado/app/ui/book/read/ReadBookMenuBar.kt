@@ -38,13 +38,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -73,17 +73,20 @@ import dev.chrisbanes.haze.HazeState
 import io.legado.app.R
 import io.legado.app.constant.ReadMenuBlurMode
 import io.legado.app.data.repository.ReadPreferences
+import io.legado.app.domain.model.settings.ReadAloudTimerMode
 import io.legado.app.ui.book.read.sheet.AutoReadContent
 import io.legado.app.ui.book.read.sheet.ReadAloudContent
 import io.legado.app.ui.book.read.sheet.ReadStyleContent
 import io.legado.app.ui.book.read.sheet.TypographyPage
 import io.legado.app.ui.book.read.sheet.TypographySection
+import io.legado.app.ui.book.readaloud.ReadAloudTimerConfig
+import io.legado.app.ui.book.readaloud.ReadAloudTimerSheet
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.button.series.SmallTonalButton
-import io.legado.app.ui.widget.components.reader.ReaderMenuEffect
 import io.legado.app.ui.widget.components.reader.ReaderMenuAnimatedBottom
 import io.legado.app.ui.widget.components.reader.ReaderMenuAnimatedTop
 import io.legado.app.ui.widget.components.reader.ReaderMenuDismissLayer
+import io.legado.app.ui.widget.components.reader.ReaderMenuEffect
 import io.legado.app.ui.widget.components.reader.ReaderMenuPlacement
 import io.legado.app.ui.widget.components.reader.ReaderMenuTintStyle
 import io.legado.app.ui.widget.components.reader.ReaderMenuVisualState
@@ -92,6 +95,8 @@ import io.legado.app.ui.widget.components.reader.readerMenuLiquidGlassAvailable
 import io.legado.app.ui.widget.components.reader.readerMenuSurfaceBrush
 import io.legado.app.ui.widget.components.settingItem.LocalSliderDragState
 import io.legado.app.ui.widget.components.settingItem.SliderDragState
+import io.legado.app.ui.widget.components.text.AppText
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
 
 /**
@@ -106,6 +111,7 @@ fun ReadBookMenuBar(
     onBrightnessPreview: (Int) -> Unit,
     backdrop: Backdrop? = null,
     hazeState: HazeState? = null,
+    seekState: StateFlow<ReadSeekUiState>,
 ) {
     val context = LocalContext.current
     val currentRoute = state.menuState.currentRoute
@@ -154,11 +160,11 @@ fun ReadBookMenuBar(
                     backdrop = backdrop,
                     hazeState = hazeState,
                     titleBarMode = preferences.titleBarMode,
+                    eyeProtectionActive = eyeProtectionActive,
                 )
                 if (state.menuConfig.showTitleBarIcons && state.menuConfig.titleBarIconPosition <= 1) {
                     FloatingIconRow(
                         state = state,
-                        preferences = preferences,
                         eyeProtectionActive = eyeProtectionActive,
                         colors = menuColors,
                         alignment = if (state.menuConfig.titleBarIconPosition == 0) {
@@ -269,7 +275,6 @@ fun ReadBookMenuBar(
                 ) {
                     FloatingIconRow(
                         state = state,
-                        preferences = preferences,
                         eyeProtectionActive = eyeProtectionActive,
                         colors = menuColors,
                         alignment = if (state.menuConfig.titleBarIconPosition == 2) {
@@ -295,6 +300,7 @@ fun ReadBookMenuBar(
                     onReadStylePageChanged = { readStylePage = it },
                     progressBarBehavior = preferences.progressBarBehavior,
                     onBrightnessPreview = onBrightnessPreview,
+                    seekState = seekState,
                 )
             }
         }
@@ -322,6 +328,7 @@ private fun ReadBookMenuSurface(
     onReadStylePageChanged: (Int) -> Unit,
     progressBarBehavior: String,
     onBrightnessPreview: (Int) -> Unit,
+    seekState: StateFlow<ReadSeekUiState>,
 ) {
     val route = when (contentTarget) {
         ReadBookMenuContent.Search -> ReadBookMenuRoute.Main
@@ -337,8 +344,12 @@ private fun ReadBookMenuSurface(
         targetValue = if (dialogLikeRoute) 1f else 0f,
         label = "ReadBookMenuMorph",
     )
+    // 朗读设置这一页是我们自己加的按钮最密的一页（播放条 + 定时 + 上下章 + 四行开关
+    // + 两根滑块 + 底部五个动作），沿用官方那 64% 的高度装不下，只能上下滑才看全，
+    // 所以只给这一路抬高上限，其它路由的观感保持不变。
     val maxHeight = with(density) {
-        windowSize.height.toDp() * 0.64f
+        val fraction = if (route == ReadBookMenuRoute.ReadAloud) 0.92f else 0.64f
+        windowSize.height.toDp() * fraction
     }
     val screenWidth = with(density) { windowSize.width.toDp() }
     val dialogAvailableWidth = screenWidth - 48.dp
@@ -557,6 +568,10 @@ private fun ReadBookMenuSurface(
             },
             label = "ReadBookMenuRoute",
         ) { target ->
+            // 朗读定时卡片的开合：放在 AnimatedContent 内的 when 之外，
+            // 菜单路由切换时随 LaunchedEffect 关闭，不会残留
+            var readAloudTimerSheetOpen by remember { mutableStateOf(false) }
+            LaunchedEffect(target) { readAloudTimerSheetOpen = false }
             when (target) {
                 ReadBookMenuContent.Search -> {
                     SearchBottomMenuContent(
@@ -581,6 +596,7 @@ private fun ReadBookMenuSurface(
                         labelColor = bottomBarTextColor,
                         progressBarBehavior = progressBarBehavior,
                         onBrightnessPreview = onBrightnessPreview,
+                        seekState = seekState,
                     )
                 }
 
@@ -708,6 +724,31 @@ private fun ReadBookMenuSurface(
                     }
 
                     ReadBookMenuRoute.ReadAloud -> {
+                        // 定时卡片叠在菜单页之上：它是宿主无关的读写组件，
+                        // 由 ReadBookMenuBar 自己的布尔状态控制，不占 activeSheet。
+                        ReadAloudTimerSheet(
+                            show = readAloudTimerSheetOpen,
+                            config = ReadAloudTimerConfig(
+                                mode = ReadAloudTimerMode.fromStorage(state.readAloudTimerMode),
+                                minutes = state.readAloudTtsTimer,
+                                chapters = state.readAloudTimerChapters,
+                                finishCurrentChapterAfterTimer =
+                                    state.readAloudFinishCurrentChapterAfterTimer,
+                            ),
+                            onDismissRequest = { readAloudTimerSheetOpen = false },
+                            onSetMode = {
+                                onIntent(
+                                    ReadBookIntent.SetReadAloudTimerMode(it.storageValue)
+                                )
+                            },
+                            onSetMinutes = { onIntent(ReadBookIntent.SetReadAloudTtsTimer(it)) },
+                            onSetChapters = {
+                                onIntent(ReadBookIntent.SetReadAloudTimerChapters(it))
+                            },
+                            onSetFinishCurrentChapterAfterTimer = {
+                                onIntent(ReadBookIntent.SetFinishCurrentChapterAfterTimer(it))
+                            },
+                        )
                         ReadBookMenuRoutePage(
                             title = stringResource(R.string.aloud_config),
                             maxHeight = maxHeight,
@@ -732,6 +773,7 @@ private fun ReadBookMenuSurface(
                                 onShowReadAloudConfig = {
                                     onIntent(ReadBookIntent.ShowReadAloudConfig)
                                 },
+                                onShowTimerSettings = { readAloudTimerSheetOpen = true },
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
@@ -795,7 +837,7 @@ private fun ReadBookMenuRoutePage(
                 icon = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = stringResource(R.string.back),
             )
-            Text(
+            AppText(
                 text = title,
                 modifier = Modifier
                     .weight(1f)

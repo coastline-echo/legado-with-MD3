@@ -18,6 +18,7 @@ object MainIntent {
     const val EXTRA_CHARACTER_ID = "characterId"
     const val EXTRA_ENTRY_ID = "entryId"
     const val EXTRA_EVENT_ID = "eventId"
+    const val EXTRA_OPEN_READ_ALOUD_PLAYER = "openReadAloudPlayer"
     const val EXTRA_READ_ALOUD = "readAloud"
     const val EXTRA_IN_BOOKSHELF = "inBookshelf"
     const val EXTRA_CHAPTER_CHANGED = "chapterChanged"
@@ -39,6 +40,7 @@ object MainIntent {
     const val EXTRA_RSS_SOURCE_URL = "extra_rss_source_url"
     const val EXTRA_RSS_SORT_URL = "extra_rss_sort_url"
     const val EXTRA_RSS_KEY = "extra_rss_key"
+    const val EXTRA_WEB_SERVICE_LOCAL_NETWORK = "webServiceLocalNetwork"
 
     const val EXTRA_RSS_READ_TITLE = "extra_rss_read_title"
     const val EXTRA_RSS_READ_ORIGIN = "extra_rss_read_origin"
@@ -60,6 +62,15 @@ object MainIntent {
             putExtra(EXTRA_START_ROUTE, MainRouteConst.ROUTE_MAIN)
         }
     }
+
+    /**
+     * 磁贴等无 Activity 的入口无法自行申请本地网络权限，转到宿主 Activity 申请并补启 Web 服务。
+     */
+    fun createWebServiceLocalNetworkIntent(context: Context): Intent =
+        createLauncherIntent(context).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(EXTRA_WEB_SERVICE_LOCAL_NETWORK, true)
+        }
 
     fun createSourceLoginIntent(
         context: Context,
@@ -215,7 +226,8 @@ object MainIntent {
     }
 
     fun createReadBookMediaControlIntent(context: Context): Intent =
-        createReadBookIntent(context, readAloud = true).apply {
+        createReadBookIntent(context, bookUrl = io.legado.app.model.ReadAloud.bookSession.book?.bookUrl,
+            readAloud = true).apply {
             // 复用 launcher Activity 并移除其上层的旧 Activity；Nav3 父栈另行重建，
             // 让阅读页返回时始终落到主页。
             addFlags(

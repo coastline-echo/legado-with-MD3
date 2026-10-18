@@ -28,6 +28,7 @@ class ReadRecordAliasDelegate(
     /** 打开书籍时检查未知作者记录；已有决定则自动执行，否则请求显示确认框。 */
     suspend fun check(book: Book) {
         if (hasActiveDialog()) return
+        if (ReadRecordIdentity.author(book.author).isEmpty()) return
         val sources = readRecordRepository.getUnknownAuthorRecords(book.name)
         if (sources.isEmpty()) return
         val key = ReadRecordIdentity.key(book.name, book.author)
@@ -37,7 +38,11 @@ class ReadRecordAliasDelegate(
             .split('\n')
             .mapNotNull { ReadRecordAliasDecision.decode(it, key) }
             .firstOrNull()
-        if (decision != null) {
+        // 书架允许同书名同作者的作品共存。出现多个副本时，「作者为空」的旧记录无法唯一归属
+        // 到当前这一本，此时不许沿用「总是合并」的历史决定，必须重新让用户确认。
+        // 副本数走与加入书架查重同一套规范化口径，否则全角/半角差异的同名副本会被漏数。
+        val ambiguous = readRecordRepository.countShelfCopies(book.name, book.author) > 1
+        if (decision != null && !ambiguous) {
             if (decision == ReadRecordAliasAction.MERGE) merge(book, sources)
             return
         }

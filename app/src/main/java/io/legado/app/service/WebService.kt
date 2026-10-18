@@ -8,6 +8,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.lifecycleScope
 import io.legado.app.R
 import io.legado.app.base.BaseService
 import io.legado.app.constant.AppConst
@@ -15,15 +16,14 @@ import io.legado.app.constant.EventBus
 import io.legado.app.constant.IntentAction
 import io.legado.app.constant.NotificationId
 import io.legado.app.constant.PreferKey
-import io.legado.app.receiver.NetworkChangedListener
 import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.receiver.NetworkChangedListener
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.eventBus.FlowEventBus
 import io.legado.app.utils.getPrefBoolean
 import io.legado.app.utils.getPrefInt
 import io.legado.app.utils.postEvent
 import io.legado.app.utils.printOnDebug
-import io.legado.app.utils.putPrefBoolean
 import io.legado.app.utils.sendToClip
 import io.legado.app.utils.servicePendingIntent
 import io.legado.app.utils.startForegroundServiceCompat
@@ -31,13 +31,11 @@ import io.legado.app.utils.startService
 import io.legado.app.utils.stopService
 import io.legado.app.utils.toastOnUi
 import io.legado.app.web.KtorServer
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import splitties.init.appCtx
 import splitties.systemservices.powerManager
 import splitties.systemservices.wifiManager
-import java.io.IOException
 
 class WebService : BaseService() {
 

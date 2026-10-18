@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -68,6 +67,7 @@ import io.legado.app.ui.widget.components.TinySwitch
 import io.legado.app.ui.widget.components.ValueStepper
 import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.text.AppText
@@ -151,7 +151,7 @@ fun TinySettingItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 imageVector?.let {
-                    Icon(
+                    AppIcon(
                         imageVector = it,
                         contentDescription = null,
                         tint = LegadoTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
@@ -178,7 +178,12 @@ fun TinySettingItem(
                     }
                 }
 
-                Box(contentAlignment = Alignment.Center) {
+                // 尾部槽位可能塞多颗（开关 + 若干小按钮）：必须横排。
+                // 用 Box 会把它们叠在同一格上——变声器行的「删除」和开关就是这么重叠的。
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     when {
                         trailingContent != null -> trailingContent()
                         isExpandable -> {
@@ -186,7 +191,7 @@ fun TinySettingItem(
                                 targetValue = if (expanded) 180f else 0f,
                                 label = "tinySettingArrow",
                             )
-                            Icon(
+                            AppIcon(
                                 imageVector = Icons.Default.KeyboardArrowDown,
                                 contentDescription = null,
                                 tint = LegadoTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
@@ -265,7 +270,7 @@ fun TinyDropdownSettingItem(
                     },
                     trailingIcon = if (selectedValue == entryValues[index]) {
                         {
-                            Icon(
+                            AppIcon(
                                 Icons.Default.Check,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
@@ -293,6 +298,14 @@ fun TinySliderSettingItem(
     showDecimal: Boolean = false,
     valueFormat: ((Float) -> String)? = null,
     onValueChange: (Float) -> Unit,
+    /**
+     * 拖动结束（或步进按钮点完）后回调。
+     *
+     * 需要「拖动中只更新本地预览、松手才写设置」的场景必须用这个而不是 [onValueChange]：
+     * 拖动中每帧写设置会触发外部 [value] 回流，与本组件内部的 `LaunchedEffect(value)` 同步
+     * 打架，表现为滑块来回跳。
+     */
+    onValueChangeFinished: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
     var sliderValue by remember(value) { mutableFloatStateOf(value) }
@@ -310,10 +323,18 @@ fun TinySliderSettingItem(
         enabled = enabled,
         trailingContent = {
             ValueStepper(
-                value = value,
+                value = sliderValue,
                 displayValue = displayValue,
                 valueRange = valueRange,
-                onValueChange = onValueChange,
+                // 步进按钮没有「松手」这一步：只发 onValueChange 的话，把提交挂在
+                // onValueChangeFinished 上的调用方（预览式滑块）点加减会毫无反应，
+                // 所以这里跟滑块松手等价处理。
+                onValueChange = {
+                    sliderValue = it
+                    displayValue = it
+                    onValueChange(it)
+                    onValueChangeFinished()
+                },
                 enabled = enabled,
                 stepSize = stepSize,
                 showDecimal = showDecimal,
@@ -331,6 +352,7 @@ fun TinySliderSettingItem(
                 },
                 onValueChangeFinished = {
                     dragState?.stopDragging()
+                    onValueChangeFinished()
                 },
                 valueRange = valueRange,
                 steps = steps,
@@ -401,7 +423,7 @@ fun TinyClickableSettingItem(
         modifier = modifier,
         color = color,
         trailingContent = trailingContent ?: {
-            Icon(
+            AppIcon(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
                 tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -525,7 +547,7 @@ private fun ColorModePill(
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
+            AppIcon(
                 imageVector = Icons.Default.DarkMode,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
@@ -535,7 +557,7 @@ private fun ColorModePill(
                     LegadoTheme.colorScheme.onSurfaceVariant
                 },
             )
-            Icon(
+            AppIcon(
                 imageVector = Icons.Default.LightMode,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
@@ -565,7 +587,7 @@ private fun ColorModePill(
             contentAlignment = Alignment.Center,
         ) {
             if (currentColor == 0) {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Add,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
@@ -648,7 +670,7 @@ private fun ClearColorModePill(
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
@@ -785,7 +807,7 @@ private fun BgImageCard(
                         .clickable(enabled = enabled, onClick = onReset),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp),
@@ -793,7 +815,7 @@ private fun BgImageCard(
                     )
                 }
             } else {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Add,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
