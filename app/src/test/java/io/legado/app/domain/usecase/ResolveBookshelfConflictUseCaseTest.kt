@@ -186,6 +186,9 @@ class ResolveBookshelfConflictUseCaseTest {
         override val currentSettings: ReadSettings = ReadSettings()
         override val settings = MutableStateFlow(ReadSettings())
         override suspend fun update(transform: (ReadSettings) -> ReadSettings) = Unit
+        override fun exportJson(): String = error("Unexpected backup export")
+        override suspend fun importJson(json: String, clearMissing: Boolean): Unit =
+            error("Unexpected backup import")
     }
 
     private companion object {

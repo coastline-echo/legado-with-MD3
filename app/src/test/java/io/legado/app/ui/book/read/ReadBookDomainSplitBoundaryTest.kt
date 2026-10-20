@@ -431,7 +431,7 @@ class ReadBookDomainSplitBoundaryTest {
                 ),
             ),
             // 按钮配置域无自持状态：按钮列表仍在 menuConfig 里，靠 stateTypes 守
-            // 「SharedPreferences 读写和归一化逻辑不回流 VM」。上游曾把「更多操作」的
+            // 「旧 SP 存取和归一化逻辑不回流 VM」。旧配置迁移归 Repository。上游曾把「更多操作」的
             // 归一化/解析直接长在 VM（MoreActionIds 是它的标记），已并回本域。
             DomainSplit(
                 name = "菜单按钮配置",

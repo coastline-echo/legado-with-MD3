@@ -1,28 +1,90 @@
 package io.legado.app.data.repository
 
+import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.google.gson.JsonParser
 import io.legado.app.constant.PreferKey
 import io.legado.app.constant.ReadMenuBlurMode
 import io.legado.app.constant.ReadMenuBlurStyle
 import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.domain.model.settings.ReadSettings
 import io.legado.app.help.config.AppConfigStore
+import io.legado.app.help.config.compatDsString
 import io.legado.app.help.config.compatDsValue
+import io.legado.app.help.config.rawPrefValue
 import io.legado.app.utils.GSON
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import splitties.init.appCtx
 
 typealias ReadPreferences = ReadSettings
+
+internal fun mergeReadSettingsJson(base: ReadSettings, json: String, clearMissing: Boolean): ReadSettings {
+    val seed = if (clearMissing) ReadSettings() else base
+    val merged = GSON.toJsonTree(seed).asJsonObject
+    JsonParser.parseString(json).asJsonObject.entrySet().forEach { (key, value) ->
+        if (!value.isJsonNull) merged.add(key, value)
+    }
+    return GSON.fromJson(merged, ReadSettings::class.java)
+}
+
+/** 迁移旧按钮字段时只填补空白；备份字段随后按原有合并／清空语义覆盖。 */
+internal fun mergeLegacyMenuButtonSettings(
+    settings: ReadSettings,
+    legacyTitle: String?,
+    legacyBottom: String?,
+    legacyActions: String?,
+): ReadSettings = settings.copy(
+    titleBarButtons = settings.titleBarButtons.ifBlank { legacyTitle.orEmpty() },
+    bottomBarButtons = settings.bottomBarButtons.ifBlank { legacyBottom.orEmpty() },
+    titleBarActions = settings.titleBarActions.ifBlank { legacyActions.orEmpty() },
+)
 
 class ReadSettingsRepository(
     private val settingsRepository: SettingsRepository,
     private val preferencesFlow: StateFlow<Preferences> = AppConfigStore.preferencesFlow,
 ) : ReadSettingsGateway {
+
+    private val legacyButtonMigrationMutex = Mutex()
+
+    /** 与备份导入共用互斥锁，避免首次打开阅读器时迟到的 SP 迁移覆盖恢复结果。 */
+    suspend fun migrateLegacyMenuButtons(context: Context) = legacyButtonMigrationMutex.withLock {
+        migrateLegacyMenuButtonsLocked(context)
+    }
+
+    private suspend fun migrateLegacyMenuButtonsLocked(context: Context) = withContext(Dispatchers.IO) {
+        val actionPrefs = context.getSharedPreferences("title_bar_actions", Context.MODE_PRIVATE)
+        val legacyActions = actionPrefs.getString("actions", null)
+        val flags = context.getSharedPreferences("read_menu_button_migration", Context.MODE_PRIVATE)
+        val migrateIcons = !flags.getBoolean("done", false)
+        val titlePrefs = context.getSharedPreferences("title_bar_icons", Context.MODE_PRIVATE)
+        val bottomPrefs = context.getSharedPreferences("tool_button_config", Context.MODE_PRIVATE)
+        val legacyTitle = if (migrateIcons) titlePrefs.getString("icons", null) else null
+        val legacyBottom = if (migrateIcons) bottomPrefs.getString("tool_buttons", null) else null
+        if (legacyActions != null || legacyTitle != null || legacyBottom != null) {
+            AppConfigStore.atomicUpdateAndAwait(
+                read = { it.toReadSettings() },
+                toPrefMap = ReadSettings::toGatewayPrefMap,
+                transform = { settings ->
+                    mergeLegacyMenuButtonSettings(settings, legacyTitle, legacyBottom, legacyActions)
+                },
+            )
+            // 只有 DataStore 落盘成功才清理旧值；失败时下次还能重试。
+            if (legacyActions != null) check(actionPrefs.edit().remove("actions").commit())
+            if (legacyTitle != null) check(titlePrefs.edit().remove("icons").commit())
+            if (legacyBottom != null) check(bottomPrefs.edit().remove("tool_buttons").commit())
+        }
+        if (migrateIcons) check(flags.edit().putBoolean("done", true).commit())
+    }
 
     override val currentSettings: ReadSettings
         get() = preferencesFlow.value.toReadSettings()
@@ -44,13 +106,17 @@ class ReadSettingsRepository(
 
     override fun exportJson(): String = GSON.toJson(currentSettings)
 
-    override suspend fun importJson(json: String) {
-        val settings = GSON.fromJson(json, ReadSettings::class.java)
-        AppConfigStore.atomicUpdate(
-            read = { it.toReadSettings() },
-            toPrefMap = ReadSettings::toGatewayPrefMap,
-            transform = { _ -> settings },
-        )
+    override suspend fun importJson(json: String, clearMissing: Boolean) {
+        // 无效备份不应触发旧配置迁移或改变当前设置。
+        mergeReadSettingsJson(ReadSettings(), json, clearMissing)
+        legacyButtonMigrationMutex.withLock {
+            migrateLegacyMenuButtonsLocked(appCtx)
+            AppConfigStore.atomicUpdateAndAwait(
+                read = { it.toReadSettings() },
+                toPrefMap = ReadSettings::toGatewayPrefMap,
+                transform = { current -> mergeReadSettingsJson(current, json, clearMissing) },
+            )
+        }
     }
 
     suspend fun setScreenOrientation(value: String) =
@@ -93,10 +159,10 @@ class ReadSettingsRepository(
         settingsRepository.putBoolean(PreferKey.useZhLayout, value)
 
     suspend fun setShowBrightnessView(value: String) =
-        settingsRepository.putString(PreferKey.showBrightnessView, value)
+        settingsRepository.putString(PreferKey.readBrightnessMode, value)
 
     suspend fun setBrightnessVwPos(value: String) =
-        settingsRepository.putString(PreferKey.brightnessVwPos, value)
+        settingsRepository.putString(PreferKey.readBrightnessControlPosition, value)
 
     suspend fun setReadBrightness(value: Int) =
         settingsRepository.putInt(PreferKey.brightness, value)
@@ -355,7 +421,23 @@ class ReadSettingsRepository(
         }
     }
 
+    /**
+     * 快照不可变，且写入必经 `AppConfigStore.rebuild()` 换新实例，因此按实例缓存映射结果。
+     * 读侧每个 `ReadBookConfig` 属性都取 [currentSettings]，不缓存则每属性重建整份记录。
+     */
+    @Volatile
+    private var settingsMemo: SettingsMemo? = null
+
+    private class SettingsMemo(val preferences: Preferences, val settings: ReadSettings)
+
     internal fun Preferences.toReadSettings(): ReadSettings {
+        settingsMemo?.let {
+            if (it.preferences === this) return it.settings
+        }
+        return buildReadSettings().also { settingsMemo = SettingsMemo(this, it) }
+    }
+
+    private fun Preferences.buildReadSettings(): ReadSettings {
         val readStyleSelect = compatDsValue(Keys.ReadStyleSelect, 0)
         return ReadSettings(
             screenOrientation = compatDsValue(Keys.ScreenOrientation, "0"),
@@ -371,8 +453,16 @@ class ReadSettingsRepository(
             textBottomJustify = compatDsValue(Keys.TextBottomJustify, true),
             adaptSpecialStyle = compatDsValue(Keys.AdaptSpecialStyle, true),
             useZhLayout = compatDsValue(Keys.UseZhLayout, false),
-            showBrightnessView = compatDsValue(Keys.ShowBrightnessView, "0"),
-            brightnessVwPos = compatDsValue(Keys.BrightnessVwPos, "1"),
+            showBrightnessView = compatDsString(PreferKey.readBrightnessMode)
+                ?: (rawPrefValue(PreferKey.showBrightnessView) as? String)
+                ?: "0",
+            brightnessVwPos = compatDsString(PreferKey.readBrightnessControlPosition)
+                ?: when (val legacy = rawPrefValue(PreferKey.brightnessVwPos)) {
+                    is String -> legacy
+                    is Boolean -> if (legacy) "1" else "0"
+                    else -> null
+                }
+                ?: "1",
             readBrightness = compatDsValue(Keys.ReadBrightness, 100),
             brightnessAuto = compatDsValue(Keys.BrightnessAuto, true),
             useUnderline = compatDsValue(Keys.UseUnderline, false),
@@ -403,10 +493,12 @@ class ReadSettingsRepository(
             expandTextMenu = compatDsValue(Keys.ExpandTextMenu, false),
             showSelectMenuIcon = compatDsValue(Keys.ShowSelectMenuIcon, true),
             textSelectMenuConfig = compatDsValue(Keys.TextSelectMenuConfig, ""),
+            lastMarkingStyle = compatDsValue(Keys.LastMarkingStyle, ""),
             showReadTitleAddition = compatDsValue(Keys.ShowReadTitleAddition, true),
             autoReadSpeed = compatDsValue(Keys.AutoReadSpeed, 10),
             systemTypefaces = compatDsValue(Keys.SystemTypefaces, 0),
             preDownloadNum = compatDsValue(Keys.PreDownloadNum, 10),
+            preDownloadNumPrev = compatDsValue(Keys.PreDownloadNumPrev, 0),
             prevKeys = compatDsValue(Keys.PrevKeys, ""),
             nextKeys = compatDsValue(Keys.NextKeys, ""),
             tocUiUseReplace = compatDsValue(Keys.TocUiUseReplace, false),
@@ -477,6 +569,7 @@ class ReadSettingsRepository(
             moreActionsConfig = compatDsValue(Keys.MoreActionsConfig, ""),
             titleBarButtons = compatDsValue(Keys.TitleBarButtons, ""),
             bottomBarButtons = compatDsValue(Keys.BottomBarButtons, ""),
+            titleBarActions = compatDsValue(Keys.TitleBarActions, ""),
         )
     }
 
@@ -494,8 +587,6 @@ class ReadSettingsRepository(
         val TextBottomJustify = booleanPreferencesKey(PreferKey.textBottomJustify)
         val AdaptSpecialStyle = booleanPreferencesKey(PreferKey.adaptSpecialStyle)
         val UseZhLayout = booleanPreferencesKey(PreferKey.useZhLayout)
-        val ShowBrightnessView = stringPreferencesKey(PreferKey.showBrightnessView)
-        val BrightnessVwPos = stringPreferencesKey(PreferKey.brightnessVwPos)
         val ReadBrightness = intPreferencesKey(PreferKey.brightness)
         val BrightnessAuto = booleanPreferencesKey(PreferKey.brightnessAuto)
         val UseUnderline = booleanPreferencesKey(PreferKey.useUnderline)
@@ -526,10 +617,12 @@ class ReadSettingsRepository(
         val ExpandTextMenu = booleanPreferencesKey(PreferKey.expandTextMenu)
         val ShowSelectMenuIcon = booleanPreferencesKey(PreferKey.showSelectMenuIcon)
         val TextSelectMenuConfig = stringPreferencesKey(PreferKey.textSelectMenuConfig)
+        val LastMarkingStyle = stringPreferencesKey(PreferKey.lastMarkingStyle)
         val ShowReadTitleAddition = booleanPreferencesKey(PreferKey.showReadTitleAddition)
         val AutoReadSpeed = intPreferencesKey(PreferKey.autoReadSpeed)
         val SystemTypefaces = intPreferencesKey(PreferKey.systemTypefaces)
         val PreDownloadNum = intPreferencesKey(PreferKey.preDownloadNum)
+        val PreDownloadNumPrev = intPreferencesKey(PreferKey.preDownloadNumPrev)
         val PrevKeys = stringPreferencesKey(PreferKey.prevKeys)
         val NextKeys = stringPreferencesKey(PreferKey.nextKeys)
         val TocUiUseReplace = booleanPreferencesKey(PreferKey.tocUiUseReplace)
@@ -599,6 +692,7 @@ class ReadSettingsRepository(
         val MoreActionsConfig = stringPreferencesKey(PreferKey.moreActionsConfig)
         val TitleBarButtons = stringPreferencesKey(PreferKey.titleBarButtons)
         val BottomBarButtons = stringPreferencesKey(PreferKey.bottomBarButtons)
+        val TitleBarActions = stringPreferencesKey(PreferKey.titleBarActions)
     }
 }
 
@@ -627,8 +721,8 @@ internal fun ReadSettings.toGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.textBottomJustify to textBottomJustify,
     PreferKey.adaptSpecialStyle to adaptSpecialStyle,
     PreferKey.useZhLayout to useZhLayout,
-    PreferKey.showBrightnessView to showBrightnessView,
-    PreferKey.brightnessVwPos to brightnessVwPos,
+    PreferKey.readBrightnessMode to showBrightnessView,
+    PreferKey.readBrightnessControlPosition to brightnessVwPos,
     PreferKey.brightness to readBrightness,
     PreferKey.brightnessAuto to brightnessAuto,
     PreferKey.useUnderline to useUnderline,
@@ -659,10 +753,12 @@ internal fun ReadSettings.toGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.expandTextMenu to expandTextMenu,
     PreferKey.showSelectMenuIcon to showSelectMenuIcon,
     PreferKey.textSelectMenuConfig to textSelectMenuConfig,
+    PreferKey.lastMarkingStyle to lastMarkingStyle,
     PreferKey.showReadTitleAddition to showReadTitleAddition,
     PreferKey.autoReadSpeed to autoReadSpeed,
     PreferKey.systemTypefaces to systemTypefaces,
     PreferKey.preDownloadNum to preDownloadNum,
+    PreferKey.preDownloadNumPrev to preDownloadNumPrev,
     PreferKey.prevKeys to prevKeys,
     PreferKey.nextKeys to nextKeys,
     PreferKey.tocUiUseReplace to tocUiUseReplace,
@@ -727,4 +823,5 @@ internal fun ReadSettings.toGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.moreActionsConfig to moreActionsConfig,
     PreferKey.titleBarButtons to titleBarButtons,
     PreferKey.bottomBarButtons to bottomBarButtons,
+    PreferKey.titleBarActions to titleBarActions,
 )

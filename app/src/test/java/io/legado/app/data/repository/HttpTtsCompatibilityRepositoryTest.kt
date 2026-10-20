@@ -125,6 +125,30 @@ class HttpTtsCompatibilityRepositoryTest {
         } finally { fresh.close() }
     }
 
+    @Test fun `clear then restore removes obsolete HTTP sources and catalog rows`() = runBlocking {
+        repository.importWithCatalogs(listOf(source(1) to catalog, source(2) to catalog))
+        repository.restore(listOf(source(2) to catalog), voices = emptyList(), clearApplication = true)
+        assertNull(db.httpTTSDao.get(1))
+        assertNotNull(db.httpTTSDao.get(2))
+        // 一个显式的空声音快照将替换所选源的声音。
+        assertTrue(db.readAloudVoiceDao.getVoices().isEmpty())
+    }
+
+    @Test fun `failed clear then restore rolls back original source and voices`() = runBlocking {
+        repository.importWithCatalogs(listOf(source(1) to catalog))
+        val before = db.readAloudVoiceDao.getVoices()
+        db.openHelper.writableDatabase.execSQL("""
+            CREATE TRIGGER fail_restore_clear BEFORE DELETE ON httpTTS
+            BEGIN SELECT RAISE(ABORT, 'forced failure'); END
+        """.trimIndent())
+        assertTrue(runCatching {
+            repository.restore(listOf(source(2) to catalog), voices = emptyList(), clearApplication = true)
+        }.isFailure)
+        assertNotNull(db.httpTTSDao.get(1))
+        assertNull(db.httpTTSDao.get(2))
+        assertEquals(before, db.readAloudVoiceDao.getVoices())
+    }
+
     @Test fun `large multi window lists remain consistent while deleting source`() = runBlocking {
         db.httpTTSDao.insert(source(1))
         val rows = (0 until 10000).map {

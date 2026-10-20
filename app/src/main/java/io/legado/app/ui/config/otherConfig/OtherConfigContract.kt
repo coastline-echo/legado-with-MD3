@@ -7,14 +7,13 @@ import kotlinx.collections.immutable.persistentListOf
 
 @Stable
 data class OtherConfigUiState(
-    val localPasswordSet: Boolean = false,
     val language: String = "auto",
     val updateToVariant: String = "official_version",
     val autoCheckUpdateOnStart: Boolean = false,
     val webServiceAutoStart: Boolean = false,
     val autoRefresh: Boolean = false,
     val defaultToRead: Boolean = false,
-    val firebaseEnable: Boolean = true,
+
     val defaultBookTreeUri: String? = null,
     val antiAlias: Boolean = false,
     val replaceEnableDefault: Boolean = true,
@@ -36,6 +35,7 @@ data class OtherConfigUiState(
     val directCompress: Boolean = false,
     val directRulePresets: ImmutableList<DirectLinkRuleUi> = persistentListOf(),
     val directTestResult: String? = null,
+    val isBatteryIgnored: Boolean = false,
     val activeOverlay: OtherConfigOverlay? = null,
     val pendingMessages: ImmutableList<OtherConfigMessage> = persistentListOf(),
 )
@@ -73,17 +73,18 @@ sealed interface OtherConfigOverlay {
     data object FilePicker : OtherConfigOverlay
     data object DirectLinkUpload : OtherConfigOverlay
     data object ClearWebViewConfirmation : OtherConfigOverlay
-    data object Password : OtherConfigOverlay
+    data object BatteryOptimizationGuide : OtherConfigOverlay
 }
 
 sealed interface OtherConfigIntent {
+    data object RefreshBatteryStatus : OtherConfigIntent
     data class LanguageChanged(val value: String) : OtherConfigIntent
     data class UpdateToVariantChanged(val value: String) : OtherConfigIntent
     data class AutoCheckUpdateOnStartChanged(val value: Boolean) : OtherConfigIntent
     data class WebServiceAutoStartChanged(val value: Boolean) : OtherConfigIntent
     data class AutoRefreshChanged(val value: Boolean) : OtherConfigIntent
     data class DefaultToReadChanged(val value: Boolean) : OtherConfigIntent
-    data class FirebaseEnableChanged(val value: Boolean) : OtherConfigIntent
+
     data class DefaultBookTreeUriChanged(val value: String?) : OtherConfigIntent
     data class AntiAliasChanged(val value: Boolean) : OtherConfigIntent
     data class ReplaceEnableDefaultChanged(val value: Boolean) : OtherConfigIntent
@@ -114,17 +115,13 @@ sealed interface OtherConfigIntent {
     data object DismissDirectTestResult : OtherConfigIntent
     data class ShowOverlay(val overlay: OtherConfigOverlay) : OtherConfigIntent
     data object DismissOverlay : OtherConfigIntent
-    data object RequestNotificationPermission : OtherConfigIntent
-    data object RequestBatteryPermission : OtherConfigIntent
     data object RequestSystemDirectory : OtherConfigIntent
     data object ConfirmClearWebViewData : OtherConfigIntent
-    data class SaveLocalPassword(val password: String) : OtherConfigIntent
     data class MessageShown(val id: Long) : OtherConfigIntent
 }
 
 sealed interface OtherConfigEffect {
-    data object RequestNotificationPermission : OtherConfigEffect
-    data object RequestBatteryPermission : OtherConfigEffect
+
     data object OpenSystemDirectory : OtherConfigEffect
     data object RestartWebService : OtherConfigEffect
     data object RestartApp : OtherConfigEffect

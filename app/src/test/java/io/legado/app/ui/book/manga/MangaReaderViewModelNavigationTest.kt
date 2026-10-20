@@ -286,6 +286,9 @@ class MangaReaderViewModelNavigationTest {
             override suspend fun update(transform: (ReadSettings) -> ReadSettings) {
                 settings.value = transform(settings.value)
             }
+            override fun exportJson(): String = error("Unexpected backup export")
+            override suspend fun importJson(json: String, clearMissing: Boolean): Unit =
+                error("Unexpected backup import")
         }
         val downloads = object : BookCacheDownloadGateway {
             override suspend fun start(request: CacheDownloadRequest): Unit =

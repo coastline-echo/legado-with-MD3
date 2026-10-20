@@ -240,6 +240,8 @@ class PrivateConfigViewModelTest {
         override suspend fun setPassword(password: String?) {
             savedPassword = password
         }
+
+        override suspend fun hasPassword(): Boolean = !savedPassword.isNullOrBlank()
     }
 
     private class FakeOtherSettingsGateway : OtherSettingsGateway {

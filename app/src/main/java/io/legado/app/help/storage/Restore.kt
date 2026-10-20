@@ -36,6 +36,9 @@ import io.legado.app.data.entities.readRecord.ReadRecordDetail
 import io.legado.app.data.entities.readRecord.ReadRecordSession
 import io.legado.app.data.entities.readRecord.ReadRecordIdentity
 import io.legado.app.data.repository.ReadRecordRepository
+import io.legado.app.data.repository.HttpTtsRepository
+import io.legado.app.data.entities.ReadAloudVoiceEntity
+import io.legado.app.help.readaloud.speech.HttpTtsCatalogParser
 import io.legado.app.domain.gateway.AppLocaleGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.gateway.ReadSettingsGateway
@@ -148,16 +151,18 @@ object Restore : KoinComponent {
         val root = File(path)
         val files = root.walkTopDown().filter(File::isFile).map { root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') }.toList()
         val payloadFiles = files.filterNot { it == "manifest.json" || it == "integrity.json" }
-        val categories = payloadFiles.filterNot { it.startsWith("assets/") }.groupingBy(::previewCategory).eachCount().toMutableMap()
+        val resourcePaths = payloadFiles.filter { it.startsWith("assets/") || it.startsWith("background/") }
+        val categories = payloadFiles.filterNot { it in resourcePaths || it == "httpTtsVoices.json" }
+            .groupingBy(::previewCategory).eachCount().toMutableMap()
         scan.manifest?.categories
             ?.filter { it.files.isNotEmpty() }
             ?.forEach { categories[it.id] = it.count }
-        payloadFiles.count { it.startsWith("assets/") }.takeIf { it > 0 }?.let { categories["resources"] = it }
+        resourcePaths.size.takeIf { it > 0 }?.let { categories["resources"] = it }
         val legacy = !File(root, "manifest.json").isFile
         return RestorePreview(
             legacyFormat = legacy,
-            fileCount = payloadFiles.count { !it.startsWith("assets/") },
-            resourceCount = payloadFiles.count { it.startsWith("assets/") },
+            fileCount = payloadFiles.size - resourcePaths.size,
+            resourceCount = resourcePaths.size,
             categories = categories,
             warnings = scan.warnings,
             sensitiveIncluded = scan.manifest?.sensitiveIncluded == true,
@@ -311,7 +316,9 @@ private fun explicitEmptyCategories(root: File, categories: Set<String>): Set<St
         categories.filterTo(linkedSetOf()) { category ->
             val files = root.walkTopDown().filter(File::isFile)
                 .filter { previewCategory(it.name) == category }
-            files.any { it.readText().trim() == "[]" }
+                // HTTP 音色为空不代表 HTTP TTS 引擎为空。
+                .filter { category != "httpTTS" || it.name == "httpTTS.json" }
+            files.any() && files.all { it.readText().trim() == "[]" }
         }
 
     /** 读取可能加密的 JSON 数组，预览阶段无密码时返回 null 跳过冲突统计。 */
@@ -382,6 +389,7 @@ private fun previewCategory(name: String): String = when (name) {
         "themeConfig.json" -> "themeConfig"
         "assets/background" -> "resources"
         "readSettings.json" -> "readSettings"
+        "httpTTS.json", "httpTtsVoices.json" -> "httpTTS"
         else -> name.substringBeforeLast('.', name)
     }
 
@@ -510,10 +518,10 @@ private suspend fun restore(
         // 各 DAO 仍负责实体主键的具体合并策略。
         val backupRestoreIgnoredCategories = BackupManifestScanner.scan(File(path)).manifest
             ?.restoreIgnoredCategories.orEmpty()
-        val plannerInputs = restorePlannerCategories(path, backupRestoreIgnoredCategories)
+        val plannerInputs = restorePlannerCategories(path, backupRestoreIgnoredCategories, backupPassword)
         val categoryPlans = RestoreCategoryPlanner.planByCategory(
             inputs = plannerInputs,
-            modes = categoryModes,
+            modes = if (mode == RestoreMode.CLEAR_THEN_RESTORE) emptyMap() else categoryModes,
             defaultMode = mode.takeUnless { it == RestoreMode.BY_CATEGORY } ?: RestoreMode.KEEP_APPLICATION,
         ).associateBy { it.category }
         // 按同一类别目录记录选择范围；只把用户未勾选的类别展示为“未处理”，
@@ -529,11 +537,10 @@ private suspend fun restore(
         }
         val explicitlyEmptyCategories = File(path).walkTopDown()
             .filter { it.isFile && it.extension.equals("json", ignoreCase = true) }
-            .mapNotNull { file ->
-                runCatching { (file.readText().trim() == "[]") to previewCategory(file.name) }.getOrNull()
-            }
-            .filter { it.first }
-            .mapTo(hashSetOf()) { it.second }
+            .filter { it.name != "httpTtsVoices.json" }
+            .groupBy { previewCategory(it.name) }
+            .filterValues { files -> files.all { it.readText().trim() == "[]" } }
+            .keys
         // 按类别/清空恢复只统计用户勾选且实际可执行的类别；
         // 之前把未勾选类别的 planner 结果也带进 categoryStats，导致详情页
         // 显示“已恢复”类别和数量高于实际执行内容。
@@ -676,31 +683,36 @@ if (resourceFailures > 0) {
         }
 // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
         if (selected("bookmark") && BackupConfig.dbIsNotIgnored("bookmark")) {
-            try {
-                appDb.withTransaction {
-                    readListStrict<Bookmark>(path, "bookmark.json") { reportCategoryFailure("bookmark", it) }?.let { bookmarks ->
-                        val plan = categoryPlans["bookmark"]
-                        if (plan?.clearApplication == true) {
-                            appDb.bookmarkDao.deleteAll()
+            val bookmarkFile = File(path, "bookmark.json")
+            val markingFile = File(path, "bookMarking.json")
+            val bookmarks = readListStrict<Bookmark>(path, "bookmark.json") { reportCategoryFailure("bookmark", it) }
+            val markings = readListStrict<BookMarking>(path, "bookMarking.json") { reportCategoryFailure("bookmark", it) }
+            val parseFailed = (bookmarkFile.isFile && bookmarks == null) ||
+                (markingFile.isFile && markings == null)
+            if (!parseFailed && (bookmarks != null || markings != null)) {
+                try {
+                    appDb.withTransaction {
+                        if (categoryPlans["bookmark"]?.clearApplication == true) {
+                            // 旧备份可能只有书签文件；缺少划线文件时不可删除设备上的划线。
+                            if (bookmarks != null) appDb.bookmarkDao.deleteAll()
+                            if (markings != null) appDb.bookMarkingDao.deleteAll()
                         }
-                        val existing = appDb.bookmarkDao.all.mapTo(hashSetOf()) { it.time }
-                        val (toUpdate, toInsert) = bookmarks.partition { it.time in existing }
-                        toUpdate.forEach { appDb.bookmarkDao.update(it) }
-                        appDb.bookmarkDao.insert(*toInsert.toTypedArray())
-                    }
-                    readListStrict<BookMarking>(path, "bookMarking.json") { reportCategoryFailure("bookmark", it) }?.let { markings ->
-                        val plan = categoryPlans["bookmark"]
-                        if (plan?.clearApplication == true) {
-                            appDb.bookMarkingDao.deleteAll()
+                        bookmarks?.let { values ->
+                            val existing = appDb.bookmarkDao.all.mapTo(hashSetOf()) { it.time }
+                            val (toUpdate, toInsert) = values.partition { it.time in existing }
+                            toUpdate.forEach { appDb.bookmarkDao.update(it) }
+                            appDb.bookmarkDao.insert(*toInsert.toTypedArray())
                         }
-                        val existing = appDb.bookMarkingDao.all.mapTo(hashSetOf()) { it.id }
-                        val (toUpdate, toInsert) = markings.partition { it.id in existing }
-                        toUpdate.forEach { appDb.bookMarkingDao.upsert(it) }
-                        appDb.bookMarkingDao.insert(*toInsert.toTypedArray())
+                        markings?.let { values ->
+                            val existing = appDb.bookMarkingDao.all.mapTo(hashSetOf()) { it.id }
+                            val (toUpdate, toInsert) = values.partition { it.id in existing }
+                            toUpdate.forEach { appDb.bookMarkingDao.upsert(it) }
+                            appDb.bookMarkingDao.insert(*toInsert.toTypedArray())
+                        }
                     }
+                } catch (error: Exception) {
+                    reportCategoryFailure("bookmark", error)
                 }
-            } catch (error: Exception) {
-                reportCategoryFailure("bookmark", error)
             }
         }
 if (selected("bookGroup") && BackupConfig.dbIsNotIgnored("bookGroup")) {
@@ -856,16 +868,21 @@ if (selected("sourceSub") && BackupConfig.dbIsNotIgnored("sourceSub")) {
                 it.exists()
             }?.runCatching {
                 val ttss = readSensitiveListStrict<HttpTTS>(this, aes)
-                val plan = categoryPlans["httpTTS"]
-                appDb.withTransaction {
-                    if (plan?.clearApplication == true) {
-                        appDb.httpTTSDao.deleteAll()
-                    }
-                    val existing = appDb.httpTTSDao.all.mapTo(hashSetOf()) { it.id }
-                    val (toUpdate, toInsert) = ttss.partition { it.id in existing }
-                    appDb.httpTTSDao.update(*toUpdate.toTypedArray())
-                    appDb.httpTTSDao.insert(*toInsert.toTypedArray())
-                        }
+                // Main 将语音目录保存在一个独立的权威表中。
+                // 在仓库的一个事务中将源和声音一起提交之前，解析每个输入。
+                val content = readText()
+                val json = if (content.isJsonArray()) content else BackupSensitiveEnvelope.decrypt(aes, content)
+                val drafts = HttpTtsCatalogParser.parseList(json)
+                require(drafts.size == ttss.size) { "httpTTS 目录条数与源条数不一致" }
+                val voiceFile = File(path, "httpTtsVoices.json")
+                val voices = if (voiceFile.isFile) {
+                    GSON.fromJsonArray<ReadAloudVoiceEntity>(voiceFile.readText()).getOrThrow()
+                } else null
+                get<HttpTtsRepository>().restore(
+                    entries = ttss.zip(drafts),
+                    voices = voices,
+                    clearApplication = categoryPlans["httpTTS"]?.clearApplication == true,
+                )
             }?.onFailure {
                 reportCategoryFailure("httpTTS", it)
                 AppLog.put("恢复 HTTP TTS 配置出错\n${it.localizedMessage}", it)
@@ -1165,7 +1182,10 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
             it.isFile && selected("readSettings") && useBackup("readSettings")
         }?.runCatching {
             val json = readText()
-            get<ReadSettingsGateway>().importJson(json)
+            get<ReadSettingsGateway>().importJson(
+                json,
+                clearMissing = categoryPlans["readSettings"]?.clearApplication == true,
+            )
         }?.onFailure {
             reportCategoryFailure("readSettings", it)
             AppLog.put("恢复阅读设置出错\n${it.localizedMessage}", it)
@@ -1208,7 +1228,15 @@ File(path, DirectLinkUpload.ruleFileName).takeIf {
         val categoryStats = categoryPlans.values
             .filter { it.category in progressCategories }
             .associate { plan ->
-            plan.category to plan.toStats(failedCategoryCounts[plan.category] ?: 0)
+            val stats = plan.toStats(failedCategoryCounts[plan.category] ?: 0)
+            plan.category to if (plan.category == "bookmark" && plan.clearApplication) {
+                // 同一类别有两个文件；旧备份缺哪个文件就保留对应本机数据。
+                val deleted = if ("bookmark" in failedCategories) 0 else plan.applicationItemIds.count { id ->
+                    (id.startsWith("bookmark:") && File(path, "bookmark.json").isFile) ||
+                        (id.startsWith("marking:") && File(path, "bookMarking.json").isFile)
+                }
+                stats.copy(deleted = deleted)
+            } else stats
         }
 BackupRestoreResultBus.emit(
             BackupRestoreResult(
@@ -1280,16 +1308,17 @@ BackupRestoreResultBus.emit(
 private fun restorePlannerCategories(
     path: String,
     backupRestoreIgnoredCategories: Set<String> = emptySet(),
+    backupPassword: String? = null,
 ): List<RestoreCategoryInput> {
         return BackupRestoreCategoryCatalog.databaseFiles.map { (category, fileName) ->
             val file = File(path, fileName)
-            val present = file.isFile
+            val present = file.isFile || (category == "bookmark" && File(path, "bookMarking.json").isFile)
             val ignored = when {
                 category in backupRestoreIgnoredCategories -> true
                 category in BackupConfig.dbIgnoreConfig.filterValues { it }.keys -> true
                 else -> false
             }
-            val backupIds = if (present) getBackupItemIds(category, file) else emptySet<String>()
+            val backupIds = if (present) getBackupItemIds(category, file, backupPassword) else emptySet<String>()
             val appIds = getApplicationItemIds(category)
             RestoreCategoryInput(
                 category = category,
@@ -1302,8 +1331,10 @@ private fun restorePlannerCategories(
             // 文件型类别用稳定的虚拟身份参与统计，避免主题和阅读配置恢复后结果仍显示为 0。
             RestoreCategoryInput(
                 category = "resources",
-                backupPresent = File(path, "assets").exists(),
-                backupItemIds = setOf("resources").takeIf { File(path, "assets").exists() }.orEmpty(),
+                backupPresent = File(path, "assets").exists() || File(path, "background").isDirectory,
+                backupItemIds = setOf("resources").takeIf {
+                    File(path, "assets").exists() || File(path, "background").isDirectory
+                }.orEmpty(),
                 ignored = "resources" in backupRestoreIgnoredCategories,
             ),
             RestoreCategoryInput(
@@ -1345,11 +1376,22 @@ private fun restorePlannerCategories(
         )
     }
 
-    private fun getBackupItemIds(category: String, file: File): Set<String> {
+    private fun getBackupItemIds(category: String, file: File, backupPassword: String?): Set<String> {
         return try {
             when (category) {
                 "bookshelf" -> GSON.fromJsonArray<Book>(file.readText()).getOrNull().orEmpty().map { it.bookUrl }.toSet()
-                "bookmark" -> GSON.fromJsonArray<Bookmark>(file.readText()).getOrNull().orEmpty().map { it.time.toString() }.toSet()
+                "bookmark" -> {
+                    val bookmarks = if (file.isFile) {
+                        GSON.fromJsonArray<Bookmark>(file.readText()).getOrThrow()
+                            .mapTo(mutableSetOf()) { "bookmark:${it.time}" }
+                    } else emptySet()
+                    val markingFile = File(file.parentFile, "bookMarking.json")
+                    val markings = if (markingFile.isFile) {
+                        GSON.fromJsonArray<BookMarking>(markingFile.readText()).getOrThrow()
+                            .mapTo(mutableSetOf()) { "marking:${it.id}" }
+                    } else emptySet()
+                    bookmarks + markings
+                }
                 "bookGroup" -> GSON.fromJsonArray<BookGroup>(file.readText()).getOrNull().orEmpty().map { it.groupId.toString() }.toSet()
                 "bookSource" -> GSON.fromJsonArray<BookSource>(file.readText()).getOrNull().orEmpty().map { it.bookSourceUrl }.toSet()
                 "rssSource" -> GSON.fromJsonArray<RssSource>(file.readText()).getOrNull().orEmpty().map { it.sourceUrl }.toSet()
@@ -1357,16 +1399,14 @@ private fun restorePlannerCategories(
                 "replaceRule" -> GSON.fromJsonArray<ReplaceRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
                 "searchHistory" -> GSON.fromJsonArray<SearchKeyword>(file.readText()).getOrNull().orEmpty().map { it.word }.toSet()
                 "readRecord" -> GSON.fromJsonArray<ReadRecord>(file.readText()).getOrNull().orEmpty().map { "${it.bookName}|${it.bookAuthor}" }.toSet()
-                "server" -> {
-                    var json = file.readText()
-                    if (!json.isJsonArray()) {
-                        json = BackupSensitiveEnvelope.decrypt(BackupAES(), json)
-                    }
-                    GSON.fromJsonArray<Server>(json).getOrNull().orEmpty().map { it.id.toString() }.toSet()
-                }
+                "server" -> readSensitiveListStrict<Server>(
+                    file, BackupAES(backupPassword.takeIf { !it.isNullOrEmpty() })
+                ).map { it.id.toString() }.toSet()
                 "sourceSub" -> GSON.fromJsonArray<RuleSub>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
                 "txtTocRule" -> GSON.fromJsonArray<TxtTocRule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
-                "httpTTS" -> GSON.fromJsonArray<HttpTTS>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
+                "httpTTS" -> readSensitiveListStrict<HttpTTS>(
+                    file, BackupAES(backupPassword.takeIf { !it.isNullOrEmpty() })
+                ).map { it.id.toString() }.toSet()
                 "keyboardAssists" -> GSON.fromJsonArray<KeyboardAssist>(file.readText()).getOrNull().orEmpty().map { "${it.type}|${it.key}" }.toSet()
                 "dictRule" -> GSON.fromJsonArray<DictRule>(file.readText()).getOrNull().orEmpty().map { it.name }.toSet()
                 "homepageModules" -> GSON.fromJsonArray<HomepageModule>(file.readText()).getOrNull().orEmpty().map { it.id.toString() }.toSet()
@@ -1378,14 +1418,18 @@ private fun restorePlannerCategories(
                 else -> emptySet<String>()
             }
         } catch (e: Exception) {
-            emptySet<String>()
+            // 无法解密或 JSON 损坏不等于明确空数组；正式导入会严格解析并上报失败。
+            if (category == "server" || category == "httpTTS" || category == "bookmark")
+                setOf("unreadable:$category")
+            else emptySet()
         }
     }
 
     private fun getApplicationItemIds(category: String): Set<String> {
         return when (category) {
             "bookshelf" -> appDb.bookDao.all.map { it.bookUrl }.toSet()
-            "bookmark" -> appDb.bookmarkDao.all.map { it.time.toString() }.toSet()
+            "bookmark" -> appDb.bookmarkDao.all.map { "bookmark:${it.time}" }.toSet() +
+                appDb.bookMarkingDao.all.map { "marking:${it.id}" }.toSet()
             "bookGroup" -> appDb.bookGroupDao.all.map { it.groupId.toString() }.toSet()
             "bookSource" -> appDb.bookSourceDao.all.map { it.bookSourceUrl }.toSet()
             "rssSource" -> appDb.rssSourceDao.all.map { it.sourceUrl }.toSet()
@@ -1622,6 +1666,7 @@ private fun restorePlannerCategories(
             localSession.deviceId,
             localSession.bookName,
             localSession.bookAuthor,
+            localSession.bookUrl,
             localSession.startTime,
             localSession.endTime,
             localSession.words

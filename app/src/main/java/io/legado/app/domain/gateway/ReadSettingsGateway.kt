@@ -20,5 +20,5 @@ interface ReadSettingsGateway {
     fun exportJson(): String
 
     /** 从 JSON 恢复 ReadSettings（仅用于备份恢复）。 */
-    suspend fun importJson(json: String)
+    suspend fun importJson(json: String, clearMissing: Boolean = false)
 }

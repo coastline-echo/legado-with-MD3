@@ -79,8 +79,10 @@ class HttpTtsRepository(
     suspend fun restore(
         entries: List<Pair<HttpTTS, HttpTtsCatalogDraft>>,
         voices: List<ReadAloudVoiceEntity>?,
+        clearApplication: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         database.withTransaction {
+            if (clearApplication) dao.deleteAll()
             importWithCatalogs(entries)
             val restoredIds = entries.mapTo(mutableSetOf()) { it.first.id.toString() }
             if (voices != null) {

@@ -49,10 +49,12 @@ data class ReadSettings(
     val expandTextMenu: Boolean = false,
     val showSelectMenuIcon: Boolean = true,
     val textSelectMenuConfig: String = "",
+    val lastMarkingStyle: String = "",
     val showReadTitleAddition: Boolean = true,
     val autoReadSpeed: Int = 10,
     val systemTypefaces: Int = 0,
     val preDownloadNum: Int = 10,
+    val preDownloadNumPrev: Int = 0,
     val prevKeys: String = "",
     val nextKeys: String = "",
     val tocUiUseReplace: Boolean = false,
@@ -117,4 +119,5 @@ data class ReadSettings(
     val moreActionsConfig: String = "",
     val titleBarButtons: String = "",
     val bottomBarButtons: String = "",
+    val titleBarActions: String = "",
 )

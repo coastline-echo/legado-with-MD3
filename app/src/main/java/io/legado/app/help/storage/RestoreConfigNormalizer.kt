@@ -11,7 +11,7 @@ internal data class RestoreConfigNormalization(
 
 /**
  * 把 config.xml 解析出的原始键值规整为可直接批量写入设置存储的 map（纯函数，便于 JVM 单测）：
- * - [PreferKey.webDavPassword]：AES 解密；解密失败时本地无密码则保留原文，否则丢弃；
+ * - [PreferKey.webDavPassword]：AES 解密；仅旧备份且本地无密码时容许明文兜底，否则丢弃；
  * - Double 转 Float（JSON 数字会被解析为 Double）；
  * - 旧版 [PreferKey.bookInfoBackgroundBlur] 拆分补写两个新背景键（备份中缺新键且未被忽略时）；
  * - 过滤忽略键与 null 值。
@@ -44,12 +44,21 @@ internal fun normalizeConfigMapWithReport(
             ignoredKeys += key
             return@forEach
         }
+        // 旧书架分组和亮度键仅作兼容输入，不能写回 main 已迁移的存储键。
+        if (key == PreferKey.saveTabPosition ||
+            key == PreferKey.showBrightnessView || key == PreferKey.brightnessVwPos) {
+            ignoredKeys += key
+            return@forEach
+        }
         when (key) {
             PreferKey.webDavPassword -> {
                 val decrypted = decryptWebDavPassword(value.toString())
-                if (decrypted == null) decryptionFailedKeys += key
                 val password = decrypted
-                    ?: value.toString().takeIf { allowLegacyPlaintextFallback && !hasLocalWebDavPassword }
+                    ?: value.toString().takeIf {
+                        allowLegacyPlaintextFallback && !hasLocalWebDavPassword &&
+                            !BackupSensitiveEnvelope.isEncrypted(it)
+                    }
+                if (password == null) decryptionFailedKeys += key
                 password?.let { finalMap[key] = it }
             }
 
@@ -58,6 +67,25 @@ internal fun normalizeConfigMapWithReport(
                 is Int, is Boolean, is Long, is Float, is String,
                 is Set<*> -> finalMap[key] = value
                 else -> unsupportedKeys += key
+            }
+        }
+    }
+    if (PreferKey.bookshelfSelectedGroupId !in map &&
+        keyIsNotIgnore(PreferKey.saveTabPosition) &&
+        keyIsNotIgnore(PreferKey.bookshelfSelectedGroupId)
+    ) {
+        (map[PreferKey.saveTabPosition] as? Long)?.let {
+            finalMap[PreferKey.bookshelfSelectedGroupId] = it
+        }
+    }
+    mapOf(
+        PreferKey.showBrightnessView to PreferKey.readBrightnessMode,
+        PreferKey.brightnessVwPos to PreferKey.readBrightnessControlPosition,
+    ).forEach { (legacyKey, newKey) ->
+        if (newKey !in map && keyIsNotIgnore(legacyKey) && keyIsNotIgnore(newKey)) {
+            when (val legacy = map[legacyKey]) {
+                is String -> finalMap[newKey] = legacy
+                is Boolean -> finalMap[newKey] = if (legacy) "1" else "0"
             }
         }
     }

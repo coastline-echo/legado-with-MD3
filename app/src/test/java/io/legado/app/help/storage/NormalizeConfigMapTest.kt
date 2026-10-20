@@ -7,6 +7,59 @@ import org.junit.Test
 
 class NormalizeConfigMapTest {
 
+    @Test
+    fun `旧亮度设置恢复到独立键`() {
+        val result = normalize(
+            mapOf(
+                PreferKey.showBrightnessView to "2",
+                PreferKey.brightnessVwPos to true,
+            )
+        )
+        assertEquals("2", result[PreferKey.readBrightnessMode])
+        assertEquals("1", result[PreferKey.readBrightnessControlPosition])
+        assertFalse(result.containsKey(PreferKey.showBrightnessView))
+        assertFalse(result.containsKey(PreferKey.brightnessVwPos))
+    }
+
+    @Test
+    fun `new sensitive envelope never falls back to plaintext after decryption failure`() {
+        val report = normalizeConfigMapWithReport(
+            mapOf(PreferKey.webDavPassword to "bad envelope"),
+            keyIsNotIgnore = { true },
+            decryptWebDavPassword = { null },
+            hasLocalWebDavPassword = false,
+            allowLegacyPlaintextFallback = false,
+        )
+        assertFalse(report.values.containsKey(PreferKey.webDavPassword))
+        assertEquals(setOf(PreferKey.webDavPassword), report.decryptionFailedKeys)
+    }
+
+    @Test
+    fun `兼容模式不把新版损坏信封误当明文密码`() {
+        val report = normalizeConfigMapWithReport(
+            mapOf(PreferKey.webDavPassword to "LEGADO_SENSITIVE_V1:broken"),
+            keyIsNotIgnore = { true },
+            decryptWebDavPassword = { null },
+            hasLocalWebDavPassword = false,
+            allowLegacyPlaintextFallback = true,
+        )
+        assertFalse(report.values.containsKey(PreferKey.webDavPassword))
+        assertEquals(setOf(PreferKey.webDavPassword), report.decryptionFailedKeys)
+    }
+
+    @Test
+    fun `legacy bookshelf key also restores independent group setting`() {
+        val restored = normalize(mapOf(PreferKey.saveTabPosition to 17L))
+        assertEquals(17L, restored[PreferKey.bookshelfSelectedGroupId])
+        assertFalse(restored.containsKey(PreferKey.saveTabPosition))
+        val independent = normalize(mapOf(
+            PreferKey.saveTabPosition to 17L,
+            PreferKey.bookshelfSelectedGroupId to 42L,
+        ))
+        assertEquals(42L, independent[PreferKey.bookshelfSelectedGroupId])
+        assertFalse(independent.containsKey(PreferKey.saveTabPosition))
+    }
+
     private fun normalize(
         map: Map<String, Any?>,
         keyIsNotIgnore: (String) -> Boolean = { true },
@@ -58,27 +111,16 @@ class NormalizeConfigMapTest {
     }
 
     @Test
-    fun `旧版兼容分支在本地无密码时保留原文`() {
-        val result = normalizeConfigMap(
+    fun `旧版兼容分支在本地无密码时保留明文且不误报解密失败`() {
+        val report = normalizeConfigMapWithReport(
             mapOf(PreferKey.webDavPassword to "rawPassword"),
             keyIsNotIgnore = { true },
             decryptWebDavPassword = { null },
             hasLocalWebDavPassword = false,
             allowLegacyPlaintextFallback = true,
         )
-        assertEquals("rawPassword", result[PreferKey.webDavPassword])
-    }
-
-    @Test
-    fun `new format skips encrypted password when decryption fails`() {
-        val result = normalizeConfigMap(
-            mapOf(PreferKey.webDavPassword to "encrypted"),
-            keyIsNotIgnore = { true },
-            decryptWebDavPassword = { null },
-            hasLocalWebDavPassword = false,
-            allowLegacyPlaintextFallback = false,
-        )
-        assertFalse(result.containsKey(PreferKey.webDavPassword))
+        assertEquals("rawPassword", report.values[PreferKey.webDavPassword])
+        assertFalse(PreferKey.webDavPassword in report.decryptionFailedKeys)
     }
 
     @Test

@@ -34,11 +34,51 @@ class ReadSettingsMappingTest {
     }
 
     @Test
-    fun `gateway 持久化映射覆盖 ReadSettings 全部 113 个字段`() {
+    fun `legacy JSON preserves newly introduced reader fields unless clearing`() {
+        val current = ReadSettings(titleBarActions = "download,true", lastMarkingStyle = "current")
+        val oldBackup = """{"titleBarButtons":"search,true"}"""
+        val merged = mergeReadSettingsJson(current, oldBackup, clearMissing = false)
+        assertEquals("download,true", merged.titleBarActions)
+        assertEquals("current", merged.lastMarkingStyle)
+        assertEquals("search,true", merged.titleBarButtons)
+        val cleared = mergeReadSettingsJson(current, oldBackup, clearMissing = true)
+        assertEquals("", cleared.titleBarActions)
+        assertEquals("", cleared.lastMarkingStyle)
+    }
+
+    @Test
+    fun `legacy button migration precedes backup import so explicit cleared values stay cleared`() {
+        val migrated = mergeLegacyMenuButtonSettings(
+            ReadSettings(),
+            legacyTitle = "search,true",
+            legacyBottom = "catalog,true",
+            legacyActions = "download,true",
+        )
+        // 旧备份未保存新字段时，仍保留本设备的旧按钮设置。
+        val oldBackup = mergeReadSettingsJson(migrated, """{"keepLight":"1"}""", clearMissing = false)
+        assertEquals("search,true", oldBackup.titleBarButtons)
+        assertEquals("catalog,true", oldBackup.bottomBarButtons)
+        assertEquals("download,true", oldBackup.titleBarActions)
+
+        val replaced = mergeReadSettingsJson(
+            migrated,
+            """{"titleBarButtons":"","bottomBarButtons":"","titleBarActions":""}""",
+            clearMissing = false,
+        )
+        assertEquals("", replaced.titleBarButtons)
+        assertEquals("", replaced.bottomBarButtons)
+        assertEquals("", replaced.titleBarActions)
+        val cleared = mergeReadSettingsJson(migrated, """{}""", clearMissing = true)
+        assertEquals("", cleared.titleBarActions)
+        assertEquals("", cleared.titleBarButtons)
+    }
+
+    @Test
+    fun `gateway 持久化映射覆盖 ReadSettings 全部 116 个字段`() {
         val actualKeys = ReadSettings().toGatewayPrefMap().keys
         val expectedKeys = ReadSettings().expectedGatewayPrefMap().keys
 
-        assertEquals(113, actualKeys.size)
+        assertEquals(116, actualKeys.size)
         assertEquals(expectedKeys, actualKeys)
     }
 
@@ -246,6 +286,9 @@ private fun readSettingsMappingSamples(): List<ReadSettings> {
         base.copy(showMenuIcon = true),
         base.copy(titleBarCompact = true),
         base.copy(moreActionsConfig = "change_source,refresh"),
+        base.copy(titleBarButtons = "search,true"),
+        base.copy(bottomBarButtons = "catalog,false"),
+        base.copy(titleBarActions = "download,true;refresh,false"),
     )
 }
 
@@ -363,4 +406,7 @@ private fun ReadSettings.expectedGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.showMenuIcon to showMenuIcon,
     PreferKey.titleBarCompact to titleBarCompact,
     PreferKey.moreActionsConfig to moreActionsConfig,
+    PreferKey.titleBarButtons to titleBarButtons,
+    PreferKey.bottomBarButtons to bottomBarButtons,
+    PreferKey.titleBarActions to titleBarActions,
 )

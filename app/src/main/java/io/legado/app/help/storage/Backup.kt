@@ -8,6 +8,7 @@ import androidx.documentfile.provider.DocumentFile
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
+import io.legado.app.data.repository.HttpTtsRepository
 import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.gateway.ThemeSettingsGateway
@@ -141,6 +142,7 @@ object Backup {
             "sourceSub.json",
             "txtTocRule.json",
             "httpTTS.json",
+            "httpTtsVoices.json",
             "keyboardAssists.json",
             "dictRule.json",
             "homepageModules.json",
@@ -334,7 +336,10 @@ if (BackupConfig.dbIsNotIgnored("bookSource", true)) {
             writeListToJson(appDb.txtTocRuleDao.all, "txtTocRule.json", backupPath)
         }
 if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
-            val sanitized = appDb.httpTTSDao.all.map(::sanitizeHttpTts)
+            // Main 将 HTTP 语音视为独立的权威表：在一个事务中对两者进行快照。
+
+            val snapshot = GlobalContext.get().get<HttpTtsRepository>().backupSnapshot()
+            val sanitized = snapshot.sources.map(::sanitizeHttpTts)
             if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.TTS_API_KEYS)) {
                 GSON.toJson(sanitized).let { json ->
                     runCatching { BackupSensitiveEnvelope.encrypt(aes, json) }
@@ -350,6 +355,10 @@ if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
                 }
             } else {
                 writeListToJson(sanitized, "httpTTS.json", backupPath)
+            }
+            // 一个明确的空数组可以区分新备份和从未存储语音的备份。
+            if (File(backupPath, "httpTTS.json").isFile) {
+                File(backupPath, "httpTtsVoices.json").writeText(GSON.toJson(snapshot.voices))
             }
         }
         if (BackupConfig.dbIsNotIgnored("keyboardAssists", true)) {
@@ -443,6 +452,23 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
             .toMutableMap()
+        if (PreferKey.bookshelfSelectedGroupId !in configMap) {
+            (configMap[PreferKey.saveTabPosition] as? Long)?.let {
+                configMap[PreferKey.bookshelfSelectedGroupId] = it
+            }
+        }
+        if (PreferKey.readBrightnessMode !in configMap) {
+            when (val legacy = configMap[PreferKey.showBrightnessView]) {
+                is String -> configMap[PreferKey.readBrightnessMode] = legacy
+                is Boolean -> configMap[PreferKey.readBrightnessMode] = if (legacy) "1" else "0"
+            }
+        }
+        if (PreferKey.readBrightnessControlPosition !in configMap) {
+            when (val legacy = configMap[PreferKey.brightnessVwPos]) {
+                is String -> configMap[PreferKey.readBrightnessControlPosition] = legacy
+                is Boolean -> configMap[PreferKey.readBrightnessControlPosition] = if (legacy) "1" else "0"
+            }
+        }
         // 文本选择菜单顺序保存在 ReadSettings DataStore，不在 AppConfigStore 中。
         configMap[PreferKey.textSelectMenuConfig] = GlobalContext.get().get<ReadSettingsGateway>().currentSettings.textSelectMenuConfig
         val writtenConfigKeys = mutableSetOf<String>()
@@ -450,6 +476,12 @@ if (BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.DIRECT_LINK
         val unsupportedConfigKeys = mutableSetOf<String>()
         val configToEncode = linkedMapOf<String, Any?>()
         configMap.forEach { (key, value) ->
+            // Main将这些别名替换为独立的键;永远不要导出它们的不明确类型。
+            if (key == PreferKey.saveTabPosition || key == PreferKey.showBrightnessView ||
+                key == PreferKey.brightnessVwPos) {
+                ignoredConfigKeys += key
+                return@forEach
+            }
             val shouldEncode = BackupConfig.keyIsNotIgnore(key, true) &&
                 (key != PreferKey.webDavPassword ||
                     BackupConfig.sensitiveSelection.includes(BackupSensitiveCategory.WEBDAV_CREDENTIALS))
@@ -895,7 +927,7 @@ webDavUploadAttempted = webDavUploadAttempted,
         "searchHistory.json" -> "searchHistory"
         "sourceSub.json" -> "sourceSub"
         "txtTocRule.json" -> "txtTocRule"
-        "httpTTS.json" -> "httpTTS"
+        "httpTTS.json", "httpTtsVoices.json" -> "httpTTS"
         "keyboardAssists.json" -> "keyboardAssists"
         "dictRule.json" -> "dictRule"
         "homepageModules.json" -> "homepageModules"
@@ -985,10 +1017,16 @@ webDavUploadAttempted = webDavUploadAttempted,
     /** 记录类别中的数据项数量；加密文件无法解析时回退到当前数据库快照。 */
     private fun manifestCategoryCounts(files: List<File>): Map<String, Int> = buildMap {
         files.groupBy { manifestCategory(it.name) }.forEach { (category, categoryFiles) ->
-            val parsed = categoryFiles.mapNotNull { file ->
+            // 音色快照是引擎的附属文件；类别数量与恢复预览一样只统计引擎。
+            val countFiles = if (category == "httpTTS") {
+                categoryFiles.filter { it.name == "httpTTS.json" }
+            } else {
+                categoryFiles
+            }
+            val parsed = countFiles.mapNotNull { file ->
                 GSON.fromJsonArray<Any>(file.readText()).getOrNull()?.size
             }
-            val count = if (parsed.size == categoryFiles.size) {
+            val count = if (parsed.size == countFiles.size) {
                 parsed.sum()
             } else {
                 when (category) {

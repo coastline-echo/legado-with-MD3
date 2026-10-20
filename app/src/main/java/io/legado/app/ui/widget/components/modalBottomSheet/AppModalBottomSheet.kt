@@ -69,8 +69,6 @@ fun AppModalBottomSheet(
         }
         WindowBottomSheet(
             show = show,
-            // Miuix 窗口不会像 Material ModalBottomSheet 一样自动限制内容高度。
-            // 先限制窗口最大高度，再由具体内容决定是否滚动，避免底部选项或按钮被裁剪。
             modifier = modifier.then(Modifier.heightIn(max = maxHeight)),
             title = title,
             startAction = startAction?.let { action ->
@@ -137,7 +135,8 @@ fun AppModalBottomSheet(
             )
             val density = LocalDensity.current
             val maxHeight = with(density) {
-                LocalWindowInfo.current.containerSize.height.toDp() * 0.8f
+                val containerHeight = LocalWindowInfo.current.containerSize.height.toDp()
+                containerHeight * 0.8f
             }
 
             MaterialExpressiveTheme(

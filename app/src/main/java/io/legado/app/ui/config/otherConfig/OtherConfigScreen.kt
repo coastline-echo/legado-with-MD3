@@ -99,38 +99,6 @@ fun OtherConfigScreen(
                 )
             }
 
-            SplicedColumnGroup(title = stringResource(R.string.privacy)) {
-
-                ClickableSettingItem(
-                    title = stringResource(R.string.notification_permission),
-                    description = stringResource(R.string.notification_permission_rationale),
-                    onClick = { onIntent(OtherConfigIntent.RequestNotificationPermission) }
-                )
-
-                ClickableSettingItem(
-                    title = stringResource(R.string.background_permission),
-                    description = stringResource(R.string.ignore_battery_permission_rationale),
-                    onClick = { onIntent(OtherConfigIntent.RequestBatteryPermission) }
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.firebase_enable_title),
-                    description = stringResource(R.string.firebase_enable_summary),
-                    checked = state.firebaseEnable,
-                    onCheckedChange = { onIntent(OtherConfigIntent.FirebaseEnableChanged(it)) }
-                )
-
-                ClickableSettingItem(
-                    title = stringResource(R.string.set_local_password),
-                    description = stringResource(
-                        if (state.localPasswordSet) R.string.local_password_set_summary
-                        else R.string.set_local_password_summary,
-                    ),
-                    onClick = { onIntent(OtherConfigIntent.ShowOverlay(OtherConfigOverlay.Password)) }
-                )
-
-            }
-
             SplicedColumnGroup(title = stringResource(R.string.read)) {
 
                 ClickableSettingItem(
@@ -196,6 +164,15 @@ fun OtherConfigScreen(
             }
 
                 SplicedColumnGroup(title = stringResource(R.string.other_setting)) {
+
+                    ClickableSettingItem(
+                        title = stringResource(R.string.background_battery_optimization_title),
+                        description = stringResource(
+                            if (state.isBatteryIgnored) R.string.battery_optimization_status_ignored
+                            else R.string.battery_optimization_status_not_ignored
+                        ),
+                        onClick = { onIntent(OtherConfigIntent.ShowOverlay(OtherConfigOverlay.BatteryOptimizationGuide)) }
+                    )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.web_service_wake_lock),

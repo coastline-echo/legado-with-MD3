@@ -238,7 +238,7 @@ class ExportBookService : BaseService(), KoinComponent {
                     if (exportConfig.type == "epub") {
                         if (exportConfig.epubScope.isNullOrBlank()) {
                             exportEpub(exportConfig.path, book)
-                            // Also export translation if cache exists
+                            // 如果存在缓存，也导出转换
                             if (hasAnyTranslatedChapter(book, exportConfig.targetLanguage)) {
                                 exportEpub(exportConfig.path, book, ContentSource.Translation)
                             }
@@ -250,7 +250,7 @@ class ExportBookService : BaseService(), KoinComponent {
                         }
                     } else {
                         exportTxt(exportConfig.path, book)
-                        // Also export translation if cache exists
+                        // 如果存在缓存，也导出转换
                         if (hasAnyTranslatedChapter(book, exportConfig.targetLanguage)) {
                             val fileDoc = FileDoc.fromDir(exportConfig.path)
                             exportTxt(fileDoc, book, ContentSource.Translation)
@@ -284,7 +284,7 @@ class ExportBookService : BaseService(), KoinComponent {
     }
 
     private data class SrcData(
-        val chapterTitle: String,
+        val chapter: BookChapter,
         val index: Int,
         val src: String
     )
@@ -312,17 +312,17 @@ class ExportBookService : BaseService(), KoinComponent {
         bookDoc.openOutputStream().getOrThrow().bufferedWriter(charset).use { bw ->
             getAllContents(book, source) { text, srcList ->
                 bw.write(text)
-                // Only export images for original source
+                // 仅导出原始源图像
                 if (source == ContentSource.Original) {
                     srcList?.forEach {
-                        val vFile = BookHelp.getImage(book, it.src)
+                        val vFile = BookHelp.getImage(book, it.chapter, it.src)
                         if (vFile.exists()) {
                             fileDoc.createFileIfNotExist(
                                 "${it.index}-${MD5Utils.md5Encode16(it.src)}.jpg",
                                 subDirs = arrayOf(
                                     "${book.name}_${book.author}",
                                     "images",
-                                    it.chapterTitle
+                                    it.chapter.title
                                 )
                             ).writeFile(vFile)
                         }
@@ -332,8 +332,8 @@ class ExportBookService : BaseService(), KoinComponent {
         }
         if (currentExportSettings.exportToWebDav) {
             // 导出到webdav
-            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
-                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
+            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { error ->
+                AppLog.put("导出到 WebDAV 失败: ${error.localizedMessage}", error)
             }
         }
     }
@@ -432,7 +432,7 @@ class ExportBookService : BaseService(), KoinComponent {
                 for (m in AppPattern.imgPattern.findAll(text)) {
                     m.groupValues[1].takeIf { it.isNotEmpty() }?.let {
                         val src = NetworkUtils.getAbsoluteURL(chapter.url, it)
-                        srcList.add(SrcData(chapter.title, index, src))
+                        srcList.add(SrcData(chapter, index, src))
                     }
                 }
             }
@@ -489,8 +489,8 @@ class ExportBookService : BaseService(), KoinComponent {
 
         if (currentExportSettings.exportToWebDav) {
             // 导出到webdav
-            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
-                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
+            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { error ->
+                AppLog.put("导出到 WebDAV 失败: ${error.localizedMessage}", error)
             }
         }
     }
@@ -661,7 +661,7 @@ class ExportBookService : BaseService(), KoinComponent {
                 ContentSource.Original -> BookHelp.getContent(book, chapter)
                 ContentSource.Translation -> translationCacheRepository.readTranslation(book, chapter, targetLanguage)
             }
-            // For translation source, don't extract images (skip fixPic)
+            // 对于翻译源，不提取图像（跳过fixPic）
             val (contentFix, resources) = if (source == ContentSource.Translation) {
                 Pair(content ?: if (chapter.isVolume) "" else "null", arrayListOf())
             } else {
@@ -737,7 +737,7 @@ class ExportBookService : BaseService(), KoinComponent {
                         "${MD5Utils.md5Encode16(src)}.${BookHelp.getImageSuffix(src)}"
                     val href =
                         "Images/${MD5Utils.md5Encode16(src)}.${BookHelp.getImageSuffix(src)}"
-                    val vFile = BookHelp.getImage(book, src)
+                    val vFile = BookHelp.getImage(book, chapter, src)
                     val fp = FileResourceProvider(vFile.parent)
                     if (vFile.exists()) {
                         val img = LazyResource(fp, href, originalHref)
@@ -959,12 +959,12 @@ class ExportBookService : BaseService(), KoinComponent {
                     .write(epubBook, bookOs)
             }
 
-if (currentExportSettings.exportToWebDav) {
-            // 导出到webdav
-            AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { e ->
-                AppLog.put("导出到 WebDAV 失败: ${e.localizedMessage}", e)
+            if (currentExportSettings.exportToWebDav) {
+                // 导出到webdav
+                AppWebDav.exportWebDav(bookDoc.uri, filename).onFailure { error ->
+                    AppLog.put("导出到 WebDAV 失败: ${error.localizedMessage}", error)
+                }
             }
-        }
         }
 
         /**
